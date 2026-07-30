@@ -9,6 +9,7 @@ matches to the site, generate them locally (``run.py play`` / ``serve``), then
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -19,9 +20,19 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 
 
+def _safe(name: str) -> str:
+    """URL/Pages-safe filename. GitHub Pages' deploy step rejects names with
+    characters like '=' (the sweep tags produce e.g. intent=balanced), so map
+    anything outside [A-Za-z0-9._-] to a dash."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", name)
+
+
 def build_site(out: Path | None = None) -> tuple[Path, int]:
     out = out or DOCS
     out.mkdir(exist_ok=True)
+    # start clean so renamed/removed games don't leave stale files behind
+    for old in list(out.glob("*_scene.html")) + [out / "index.html"]:
+        old.unlink(missing_ok=True)
     # make sure every saved game has a rendered scene, then rebuild the gallery
     for jp in sorted(LOG_DIR.glob("*.json")):
         try:
@@ -33,14 +44,16 @@ def build_site(out: Path | None = None) -> tuple[Path, int]:
                 render_scene(r, sc)
         except Exception:
             continue
-    gallery = build_gallery()
-    # the gallery's ▶ Replay links are bare "<stem>_scene.html" names, so putting
-    # the gallery (as index.html) and the scenes side by side makes them resolve
-    shutil.copy(gallery, out / "index.html")
+    gallery_html = build_gallery().read_text()
+    # copy scenes under Pages-safe names, rewriting the gallery's ▶ Replay links
     n = 0
-    for sc in LOG_DIR.glob("*_scene.html"):
-        shutil.copy(sc, out / sc.name)
+    for sc in sorted(LOG_DIR.glob("*_scene.html")):
+        safe = _safe(sc.name)
+        shutil.copy(sc, out / safe)
+        if safe != sc.name:
+            gallery_html = gallery_html.replace(sc.name, safe)
         n += 1
+    (out / "index.html").write_text(gallery_html)
     (out / ".nojekyll").write_text("")   # let Pages serve files verbatim (no Jekyll)
     return out, n
 
