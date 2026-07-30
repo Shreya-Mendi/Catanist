@@ -1,0 +1,8 @@
+# The core arena + offline mock provider run on the Python standard library alone.
+# Install the OpenAI SDK to enable real models — it speaks both the OpenAI API and
+# the GitHub Models endpoint (the recommended free/low-cost backend):
+openai>=1.40          # provider "github" (GITHUB_TOKEN) and "openai" (OPENAI_API_KEY)
+
+# Optional extra backends:
+anthropic>=0.40       # provider "anthropic"  (ANTHROPIC_API_KEY)
+google-generativeai>=0.8  # provider "google" (GOOGLE_API_KEY)

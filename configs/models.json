@@ -1,0 +1,14 @@
+{
+  "name": "models",
+  "seed": 11,
+  "scene": "harbor",
+  "_note": "Real cross-model match on GitHub Models. Requires a GitHub PAT with the 'models:read' scope in $GITHUB_TOKEN (or Catanist/.env). Model ids match assets/models_catalog.json — the catalogue shifts, so check github.com/marketplace/models. Swap any player's provider to 'mock' to preview with no key. Optional per-player \"strategy\": none|placebo|taught (game-theory priming).",
+  "players": [
+    {"name": "Merlin", "provider": "github", "model": "openai/gpt-4o",                  "costume": "wizard",  "color": "#7c5cff", "persona": "calm, analytical, patient",       "intent": "balanced"},
+    {"name": "Pip",    "provider": "github", "model": "openai/gpt-4o-mini",             "costume": "jester",  "color": "#f2a03d", "persona": "playful opportunist",             "intent": "greedy"},
+    {"name": "Roland", "provider": "github", "model": "meta/llama-3.3-70b-instruct",    "costume": "knight",  "color": "#e05c5c", "persona": "bold and aggressive",             "intent": "cutthroat"},
+    {"name": "Vesper", "provider": "github", "model": "deepseek/deepseek-v3-0324",      "costume": "vampire", "color": "#b14b8a", "persona": "sly and secretive",               "intent": "deceptive"},
+    {"name": "Isolde", "provider": "github", "model": "mistral-ai/mistral-medium-2505", "costume": "queen",   "color": "#3d9bf2", "persona": "regal diplomat, seeks consensus", "intent": "diplomatic"},
+    {"name": "Bram",   "provider": "github", "model": "microsoft/phi-4",                "costume": "monk",    "color": "#54c26a", "persona": "quiet, methodical builder",       "intent": "builder"}
+  ]
+}

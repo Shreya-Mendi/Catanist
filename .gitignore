@@ -1,0 +1,13 @@
+# secrets — never commit the token
+.env
+
+# python
+__pycache__/
+*.pyc
+
+# derived HTML in logs/ (regenerate with `python run.py gallery`); the published
+# static site lives in docs/ and IS committed for GitHub Pages.
+logs/*.html
+
+# macOS
+.DS_Store

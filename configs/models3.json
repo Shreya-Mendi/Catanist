@@ -1,0 +1,11 @@
+{
+  "name": "models3",
+  "seed": 7,
+  "scene": "harbor",
+  "_note": "A lighter 3-model real match. Uses three distinct OpenAI models — they have the most generous free-tier limits (least throttling) and reliably execute Catan's build chain, so the game stays genuine and finishes. Swap in other families (meta/*, deepseek/*, mistral-ai/*) for more diversity at the cost of speed. Requires GITHUB_TOKEN (models:read).",
+  "players": [
+    {"name": "Merlin", "provider": "github", "model": "openai/gpt-4o",      "costume": "wizard", "color": "#7c5cff", "persona": "calm, analytical, patient", "intent": "balanced"},
+    {"name": "Roland", "provider": "github", "model": "openai/gpt-4.1",      "costume": "knight", "color": "#e05c5c", "persona": "bold and aggressive",       "intent": "cutthroat"},
+    {"name": "Isolde", "provider": "github", "model": "openai/gpt-4o-mini",  "costume": "queen",  "color": "#3d9bf2", "persona": "regal diplomat",           "intent": "diplomatic"}
+  ]
+}

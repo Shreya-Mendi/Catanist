@@ -1,0 +1,12 @@
+{
+  "name": "demo",
+  "seed": 3,
+  "scene": "harbor",
+  "_note": "Offline preview on the mock provider — no API keys needed. Swap provider to 'github' and set GITHUB_TOKEN to play real models.",
+  "players": [
+    {"name": "Merlin", "provider": "mock", "model": "openai/gpt-4o",                 "costume": "wizard",  "color": "#7c5cff", "persona": "calm, analytical, patient",        "intent": "balanced"},
+    {"name": "Roland", "provider": "mock", "model": "meta/Llama-3.3-70B-Instruct",   "costume": "knight",  "color": "#e05c5c", "persona": "bold and aggressive",              "intent": "cutthroat"},
+    {"name": "Vesper", "provider": "mock", "model": "deepseek/DeepSeek-V3-0324",     "costume": "vampire", "color": "#b14b8a", "persona": "sly and secretive",                "intent": "deceptive"},
+    {"name": "Isolde", "provider": "mock", "model": "mistral-ai/Mistral-Large-2411", "costume": "queen",   "color": "#3d9bf2", "persona": "regal diplomat, seeks consensus",  "intent": "diplomatic"}
+  ]
+}

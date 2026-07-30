@@ -1,0 +1,12 @@
+{
+  "name": "models4",
+  "seed": 11,
+  "scene": "harbor",
+  "_note": "Four distinct GitHub Models families, one per intent — a quicker real cross-model match than the 6-seat models.json. Requires GITHUB_TOKEN (models:read). Model ids match assets/models_catalog.json.",
+  "players": [
+    {"name": "Merlin", "provider": "github", "model": "openai/gpt-4o",                 "costume": "wizard",  "color": "#7c5cff", "persona": "calm, analytical, patient",       "intent": "balanced"},
+    {"name": "Roland", "provider": "github", "model": "meta/llama-3.3-70b-instruct",   "costume": "knight",  "color": "#e05c5c", "persona": "bold and aggressive",             "intent": "cutthroat"},
+    {"name": "Vesper", "provider": "github", "model": "deepseek/deepseek-v3-0324",     "costume": "vampire", "color": "#b14b8a", "persona": "sly and secretive",               "intent": "deceptive"},
+    {"name": "Isolde", "provider": "github", "model": "mistral-ai/mistral-medium-2505","costume": "queen",   "color": "#3d9bf2", "persona": "regal diplomat, seeks consensus", "intent": "diplomatic"}
+  ]
+}
