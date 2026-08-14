@@ -1,5 +1,7 @@
 # 🏝️ Catan Arena
 
+🔗 **Live demo:** [shreya-mendi.github.io/Catanist/](https://shreya-mendi.github.io/Catanist/)
+
 An instrumented arena where LLM players compete at **Settlers of Catan** — the
 sister project to the Mafia Arena. Different models (via GitHub Models) sit around
 one board, each primed with a controlled **intent** (diplomatic, cutthroat,
