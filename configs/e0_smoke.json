@@ -1,0 +1,37 @@
+{
+  "name": "e0smoke",
+  "seed": 3,
+  "scene": "harbor",
+  "speech_mode": "typed",
+  "max_turns": 24,
+  "_note": "E0 real-model smoke run on the HF router (GitHub Models retired 2026-07-30): 3x Llama-3.1-8B-Instruct, typed speech, short horizon, paced.",
+  "players": [
+    {
+      "name": "Merlin",
+      "provider": "hf",
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "costume": "wizard",
+      "color": "#7c5cff",
+      "persona": "calm, analytical, patient",
+      "intent": "balanced"
+    },
+    {
+      "name": "Isolde",
+      "provider": "hf",
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "costume": "queen",
+      "color": "#3d9bf2",
+      "persona": "regal diplomat, seeks consensus",
+      "intent": "diplomatic"
+    },
+    {
+      "name": "Vesper",
+      "provider": "hf",
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "costume": "vampire",
+      "color": "#b14b8a",
+      "persona": "sly and secretive",
+      "intent": "deceptive"
+    }
+  ]
+}

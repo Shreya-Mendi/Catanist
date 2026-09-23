@@ -50,13 +50,15 @@ class MockProvider(Provider):
                 f"most while I'm not producing anyway. I'll block a high-pip number and "
                 f"steal from {v or 'no one reachable'} to chip at their build. "
                 f"Playing {intent}, that pressure fits how I want this game to go.")
-            return json.dumps({
+            out = {
                 "private_reasoning": reason,
                 "public_statement": self.rng.choice(
                     ["The robber rides.", "Sorry, nothing personal.",
                      "Blocking the good numbers."]),
                 "hex": self.rng.choice(hexes), "victim": v,
-            })
+            }
+            out.update(self._instrument(system, options, "rob"))
+            return json.dumps(out)
         if kind == "trade_response":
             accept = self.rng.random() < (0.3 if "greedy" in intent else 0.55)
             give, want = options.get("give", {}), options.get("want", {})
@@ -65,11 +67,13 @@ class MockProvider(Provider):
                 f"I check whether that advances my next build more than theirs — "
                 f"{'it does enough to say yes' if accept else 'it helps them more, so no'}. "
                 f"Playing {intent}, I {'take the deal' if accept else 'hold my resources'}.")
-            return json.dumps({
+            out = {
                 "private_reasoning": reason,
                 "public_statement": ("Deal." if accept else "I'll pass on that."),
                 "accept": accept,
-            })
+            }
+            out.update(self._instrument(system, options, "end_turn"))
+            return json.dumps(out)
 
         # generic action turn
         legal = options.get("legal", ["end_turn"])
@@ -83,7 +87,66 @@ class MockProvider(Provider):
             "public_statement": pub,
         }
         out.update(choice)
+        out.update(self._instrument(system, options, choice["action"]))
         return json.dumps(out)
+
+
+    def _instrument(self, system, options, action):
+        """intent / plan / speech fields for the E0 instrument. In typed mode the
+        mock deliberately lies sometimes when its INTENT block is deceptive, so
+        offline logs contain true violations for the battery tests to catch."""
+        intent_tag = _sniff(system, "INTENT:")
+        legal = options.get("legal", [])
+        have = {r: n for r, n in (options.get("have") or {}).items() if n > 0}
+        # a genuine 3-step lookahead in the mock's own strategy: act now, then the
+        # cheapest scoring goal, then close the turn — so plan follow-through and
+        # plan-vs-speech divergence are exercised offline exactly like live games
+        goal = ("build_city" if options.get("city_spots")
+                else "build_settlement" if options.get("settlement_spots")
+                else "build_road toward an open spot" if options.get("road_spots")
+                else "bank_trade toward my next build")
+        plan = [action.replace("rob", "rob the strongest producer"), goal, "end_turn"]
+        seen, dedup = set(), []
+        for st in plan:
+            k = st.split()[0]
+            if k not in seen:
+                seen.add(k); dedup.append(st)
+        goal_word = goal.split()[0].replace("_", " ")
+        intent_line = self.rng.choice([
+            f"Lock in a {goal_word} while the table is distracted.",
+            f"Shore up my economy, then push for a {goal_word}.",
+            f"Keep {(' and '.join(sorted(have)[:2]) or 'my hand')} working toward a {goal_word}.",
+            f"Play it {intent_tag}: {action.replace('_', ' ')} now, {goal_word} soon.",
+        ])
+        out = {"intent": intent_line, "plan": dedup[:3]}
+        if "SPEECH MODE: TYPED" not in (system or ""):
+            return out
+        have = {r: n for r, n in (options.get("have") or {}).items() if n > 0}
+        partners = options.get("trade_partners") or options.get("player_names") or []
+        partners = [p for p in partners if p != _sniff(system, "NAME:")]
+        deceptive = "deceptive" in intent_tag.lower()
+        roll = self.rng.random()
+        if roll < 0.35 or not partners:
+            sp = {"type": "none", "flavor": self.rng.choice(
+                ["Nice roll.", "Slow turn.", "Building quietly."])}
+        elif roll < 0.55 and have:
+            res = self.rng.choice(sorted(have))
+            lie = deceptive and self.rng.random() < 0.6
+            sp = {"type": "claim", "resource": res, "has": not lie,
+                  "flavor": "Just so everyone knows."}
+        elif roll < 0.8:
+            sp = {"type": "promise", "act": "no_rob",
+                  "target": self.rng.choice(partners),
+                  "window": self.rng.choice([1, 2, 3]), "flavor": "You have my word."}
+        elif have:
+            sp = {"type": "promise", "act": "will_trade",
+                  "target": self.rng.choice(partners),
+                  "resource": self.rng.choice(sorted(have)),
+                  "window": self.rng.choice([1, 2]), "flavor": "Fair deal coming."}
+        else:
+            sp = {"type": "announce", "text": "Pushing toward the best open spot."}
+        out["speech"] = sp
+        return out
 
     def _reason(self, action, options, intent, model):
         """A detailed, state-aware reasoning trace so 'peek at thoughts' reads as
@@ -169,20 +232,22 @@ class AnthropicProvider(Provider):
 
 
 class OpenAIProvider(Provider):
+    """Official OpenAI API. Reuses the hardened OpenAI-compatible path below
+    (retries with backoff, CATAN_PACE_S pacing, 402 fail-fast, both SDK shapes)
+    by delegating to the same complete() implementation."""
+
     name = "openai"
 
     def __init__(self):
         import openai  # lazy
-        self.client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        key = os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "OpenAI needs a key: put OPENAI_API_KEY=sk-... in Catanist/.env")
+        self.client = openai.OpenAI(api_key=key)
 
     def complete(self, system, user, model, options):
-        resp = self.client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            max_tokens=900,
-        )
-        return resp.choices[0].message.content or ""
+        return GitHubModelsProvider.complete(self, system, user, model, options)
 
 
 class GitHubModelsProvider(Provider):
@@ -209,8 +274,16 @@ class GitHubModelsProvider(Provider):
                 "(Preview with no key using a 'mock' config, e.g. configs/demo.json.)")
         self.client = openai.OpenAI(base_url=self.BASE_URL, api_key=tok)
 
+    _last_call = 0.0
+
     def complete(self, system, user, model, options):
         import time
+        pace = float(os.environ.get("CATAN_PACE_S", "0") or 0)
+        if pace > 0:
+            wait = self._last_call + pace - time.time()
+            if wait > 0:
+                time.sleep(wait)
+        type(self)._last_call = time.time()
         for attempt in range(self.RETRIES):
             try:
                 resp = self.client.chat.completions.create(
@@ -219,6 +292,8 @@ class GitHubModelsProvider(Provider):
                               {"role": "user", "content": user}],
                     max_tokens=1100, temperature=0.8,
                 )
+                if isinstance(resp, str):   # newer openai SDKs return the text directly
+                    return resp
                 return resp.choices[0].message.content or ""
             except Exception as e:
                 # only back off on genuinely transient errors (rate-limit / timeout /
@@ -227,23 +302,55 @@ class GitHubModelsProvider(Provider):
                 nm = type(e).__name__
                 transient = ("RateLimit" in nm or "Timeout" in nm or "Connection" in nm
                              or (isinstance(status, int) and status >= 500))
+                if isinstance(status, int) and status == 402:
+                    transient = False   # out of credits: fail fast, never retry
                 if not transient or attempt == self.RETRIES - 1:
                     raise
                 time.sleep(self.BACKOFF[min(attempt, len(self.BACKOFF) - 1)])
         return ""
 
 
-class GoogleProvider(Provider):
-    name = "google"
+class HFRouterProvider(GitHubModelsProvider):
+    """Hugging Face Inference Providers — OpenAI-compatible router.
+
+    Endpoint: https://router.huggingface.co/v1  ·  Auth: an HF token (fine-grained,
+    inference permission) from $HF_TOKEN or the hf CLI login cache. Model ids are
+    hub ids, e.g. "meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-7B-Instruct";
+    the router picks a serving provider. Replaces GitHub Models, which was fully
+    retired on 2026-07-30 (its endpoint now answers 200 text/plain "OK").
+    """
+
+    name = "hf"
+    BASE_URL = "https://router.huggingface.co/v1"
 
     def __init__(self):
-        import google.generativeai as genai  # lazy
-        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-        self._genai = genai
+        import openai
+        from pathlib import Path
+        tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if not tok:
+            cache = Path.home() / ".cache" / "huggingface" / "token"
+            tok = cache.read_text().strip() if cache.exists() else None
+        if not tok:
+            raise RuntimeError(
+                "HF router needs a token: set HF_TOKEN or `hf auth login`.")
+        self.client = openai.OpenAI(base_url=self.BASE_URL, api_key=tok)
 
-    def complete(self, system, user, model, options):
-        m = self._genai.GenerativeModel(model, system_instruction=system)
-        return m.generate_content(user).text
+
+class GoogleProvider(GitHubModelsProvider):
+    """Gemini via Google's OpenAI-compatible endpoint — reuses the hardened
+    retry/pacing/402 path, no google SDK needed. Key: GOOGLE_API_KEY or
+    GEMINI_API_KEY. Model ids: "gemini-2.5-flash", "gemini-2.5-pro", ..."""
+
+    name = "google"
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+    def __init__(self):
+        import openai
+        key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "Gemini needs a key: put GOOGLE_API_KEY=... in Catanist/.env")
+        self.client = openai.OpenAI(base_url=self.BASE_URL, api_key=key)
 
 
 # provider-name -> factory. Add rows here to support more backends.
@@ -252,6 +359,7 @@ _REGISTRY = {
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
     "github": GitHubModelsProvider,
+    "hf": HFRouterProvider,
     "google": GoogleProvider,
 }
 

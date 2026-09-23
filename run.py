@@ -88,6 +88,17 @@ def main():
     g = sub.add_parser("gallery", help="rebuild logs/gallery.html from all saved games")
     g.set_defaults(func=cmd_gallery)
 
+    au = sub.add_parser("adduser", help="whitelist a console user (prompts for password)")
+    au.add_argument("name")
+    au.add_argument("--admin", action="store_true")
+    def cmd_adduser(args):
+        import getpass
+        from arena import db as _db
+        _db.create_user(args.name, getpass.getpass(f"password for {args.name}: "),
+                        is_admin=args.admin)
+        print(f"user '{args.name}' whitelisted")
+    au.set_defaults(func=cmd_adduser)
+
     sv = sub.add_parser("serve", help="launch the interactive web launcher")
     sv.add_argument("--port", type=int, default=8756)
     sv.set_defaults(func=cmd_serve)

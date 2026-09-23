@@ -61,6 +61,33 @@ def _provider_cache():
     return get
 
 
+TEAM_ALL = ("You are ALL ON ONE TEAM. The table wins or loses together: your "
+            "shared goal is the combined victory points of the whole table, and "
+            "every player winning is you winning. Play and talk accordingly.")
+
+
+def _framing_for(cfg: dict, i: int) -> str:
+    """Per-seat table framing. Modes: '' free-for-all · 'team' one shared team ·
+    'pairs' teams of two, seats paired in order (1+2, 3+4, ...). Prompt-level
+    only — the rules and scoring never change."""
+    mode = cfg.get("framing_mode", "")
+    if not mode and cfg.get("framing"):
+        return cfg["framing"]                     # raw text passthrough
+    names = [p["name"] for p in cfg["players"]]
+    if mode == "team":
+        return TEAM_ALL
+    if mode == "pairs":
+        mate = names[i + 1] if i % 2 == 0 else names[i - 1]
+        letter = "ABC"[i // 2]
+        rivals = ", ".join(n for n in names if n not in (names[i], mate))
+        return (f"TEAMS OF TWO. You are on TEAM {letter} with {mate}. You and "
+                f"{mate} win or lose TOGETHER: your team score is your combined "
+                f"victory points, and helping {mate} is helping yourself. The "
+                f"other players ({rivals}) are the rival teams. Coordinate with "
+                f"your teammate; compete with the rest.")
+    return ""
+
+
 def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
     players = []
     for i, spec in enumerate(cfg["players"]):
@@ -70,6 +97,10 @@ def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
             persona=spec.get("persona", "neutral"),
             intent=spec.get("intent", "balanced"),
             strategy=spec.get("strategy", "none"),
+            speech_mode=cfg.get("speech_mode", "free"),
+            intent_text=spec.get("intent_text", ""),
+            instruction=spec.get("instruction", cfg.get("instruction", "")),
+            framing=_framing_for(cfg, i),
             costume=spec.get("costume", ""), color=spec.get("color", ""),
             provider=prov,
             rng=random.Random(cfg.get("seed", 0) + i),
@@ -77,10 +108,13 @@ def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
     return players
 
 
-def run_one(cfg: dict, provider_get=None) -> dict:
+def run_one(cfg: dict, provider_get=None, progress_cb=None) -> dict:
     provider_get = provider_get or _provider_cache()
     players = build_players(cfg, provider_get)
-    game = Game(players, seed=cfg.get("seed", 0))
+    game = Game(players, seed=cfg.get("seed", 0),
+                speech_mode=cfg.get("speech_mode", "free"),
+                max_turns=cfg.get("max_turns"),
+                progress_cb=progress_cb)
     result = game.run()
     result["config_name"] = cfg.get("name", "game")
     result["scene"] = cfg.get("scene", "harbor")   # viz theme

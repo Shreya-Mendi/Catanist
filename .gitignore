@@ -11,3 +11,9 @@ logs/*.html
 
 # macOS
 .DS_Store
+
+# console (experiment server) local state
+.console_secret
+logs/arena.db
+logs/arena.db-*
+research/exports/
