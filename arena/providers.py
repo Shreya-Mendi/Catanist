@@ -289,12 +289,24 @@ class GitHubModelsProvider(Provider):
         type(self)._last_call = time.time()
         for attempt in range(self.RETRIES):
             try:
-                resp = self.client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "system", "content": system},
-                              {"role": "user", "content": user}],
-                    max_tokens=1100, temperature=0.8,
-                )
+                kw = dict(max_tokens=1100, temperature=0.8)
+                msgs = [{"role": "system", "content": system},
+                        {"role": "user", "content": user}]
+                try:
+                    resp = self.client.chat.completions.create(
+                        model=model, messages=msgs, **kw)
+                except Exception as e1:
+                    # newer OpenAI generations reject the legacy params:
+                    # swap max_tokens and drop the custom temperature
+                    msg = str(e1)
+                    if "max_tokens" in msg or "max_completion_tokens" in msg:
+                        kw = {"max_completion_tokens": 1100}
+                    elif "temperature" in msg:
+                        kw.pop("temperature", None)
+                    else:
+                        raise
+                    resp = self.client.chat.completions.create(
+                        model=model, messages=msgs, **kw)
                 if isinstance(resp, str):   # newer openai SDKs return the text directly
                     return resp
                 return resp.choices[0].message.content or ""

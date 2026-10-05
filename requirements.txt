@@ -3,6 +3,7 @@
 openai>=1.40     # providers "openai" (OPENAI_API_KEY) and "google" — Gemini speaks
                  # the OpenAI-compatible endpoint (GOOGLE_API_KEY); no Google SDK needed
 tinker>=0.30     # provider "tinker" (TINKER_API_KEY) — OSS models; also the E5 training arm
+jinja2>=3.1      # tokenizer chat templates (tinker sampling path)
 
 # Optional:
 anthropic>=0.40  # provider "anthropic" (ANTHROPIC_API_KEY)
