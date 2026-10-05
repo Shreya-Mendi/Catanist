@@ -364,6 +364,7 @@ def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
                 "dev_buy": lambda: "buys a development card",
                 "dev_play": lambda: f"plays {e.get('card')}",
                 "discard": lambda: f"discards {e.get('dropped')}",
+                "pass": lambda: "ends the turn (no action taken)",
                 }.get(t, lambda: t)()
         tags = ""
         if e.get("played_by") == "heuristic":

@@ -413,6 +413,10 @@ class Game:
             if action not in opts["legal"]:
                 action = "end_turn"
             if action == "end_turn":
+                # the decision to do nothing is still a decision: log it with its
+                # full instrument payload (reasoning, intent, plan, speech) so
+                # quiet turns stay readable and any attached promise registers
+                self._log(type="pass", actor=p.name, **self._dfields(dec))
                 break
             if action == "propose_trade":
                 trades += 1
