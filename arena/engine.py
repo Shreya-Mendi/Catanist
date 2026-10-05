@@ -463,8 +463,7 @@ class Game:
                 out["claim_true"] = dec._claim_true
         if getattr(dec, "resampled", False):
             out["resampled"] = True
-        if not dec.parse_ok:
-            out["raw"] = (dec.raw or "")[:500]
+        out["raw"] = (dec.raw or "")[:8000]   # byte-exact model reply, always
         if getattr(dec, "fallback", False):
             out["played_by"] = "heuristic"
         if getattr(dec, "prompt", ""):

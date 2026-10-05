@@ -519,7 +519,9 @@ async function addNote(id){
   $("#note-"+id).value=""; renderArchive(); }
 async function doExport(id){
   const r=await api("/api/export",{experiment_id:id});
-  $("#exp-"+id).textContent="exported → "+r.zip; }
+  const name=r.zip.split("/").pop();
+  $("#exp-"+id).innerHTML=`<a class="ghost" href="/exports/${name}"
+    data-info="The complete analysis bundle: experiment record, every raw game log, all labels, computed metrics, and the frozen battery spec.">download ${name}</a>`; }
 
 /* ================= Guide ================= */
 function renderGuide(){

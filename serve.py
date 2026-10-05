@@ -562,8 +562,8 @@ class Handler(BaseHTTPRequestHandler):
                 eid = int(path.rsplit("/", 1)[1])
                 runs = [dict(r) for r in con.execute(
                     "SELECT id,condition,seed,status,progress_turn,progress_vps,"
-                    "max_turns,log_path,error,owner FROM runs WHERE experiment_id=? "
-                    "ORDER BY id", (eid,))]
+                    "max_turns,log_path,error,owner,config FROM runs "
+                    "WHERE experiment_id=? ORDER BY id", (eid,))]
                 notes = [dict(r) for r in con.execute(
                     "SELECT author,text,created FROM annotations "
                     "WHERE experiment_id=? ORDER BY id", (eid,))]
@@ -648,6 +648,13 @@ class Handler(BaseHTTPRequestHandler):
                     if len(items) >= 25:
                         break
                 return self._send(200, items)
+            if path.startswith("/exports/"):
+                f = ROOT / "research" / "exports" / Path(path[len("/exports/"):]).name
+                if f.exists():
+                    return self._send(200, f.read_bytes(), "application/zip",
+                                      extra={"Content-Disposition":
+                                             f"attachment; filename={f.name}"})
+                return self._send(404, {"err": "no such export"})
             if path.startswith("/logs/"):
                 f = ROOT / "logs" / Path(path[len("/logs/"):]).name
                 if f.exists():
