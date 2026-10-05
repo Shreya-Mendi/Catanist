@@ -103,3 +103,10 @@ this fix are void (violation adjudications remain valid); the coaching-freeze
 null and the friendly-table freeze were artifacts. Schema now declares accept
 explicitly and the response prompt instructs setting it. Affected experiments
 rerun under the fixed schema.
+
+## Addendum 2026-10-05 (pass events)
+End-turn decisions are now logged as `pass` events with the full instrument
+payload. Before this, a majority of quiet-turn decisions (8/10 in the mock
+check) silently discarded their speech: statement and informativeness counts
+in earlier typed runs are undercounts, and a promise attached to an end-turn
+breath never registered. Adjudications of logged statements were unaffected.
