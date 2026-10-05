@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS runs(
   id INTEGER PRIMARY KEY, experiment_id INTEGER, owner TEXT,
   config TEXT NOT NULL, condition TEXT DEFAULT '', seed INTEGER DEFAULT 0,
   status TEXT DEFAULT 'queued',           -- queued|running|done|failed
-  progress_turn INTEGER DEFAULT 0, max_turns INTEGER DEFAULT 120,
+  progress_turn INTEGER DEFAULT 0, progress_vps TEXT,
+  max_turns INTEGER DEFAULT 120,
   log_path TEXT, metrics TEXT, error TEXT,
   created REAL, started REAL, finished REAL);
 CREATE TABLE IF NOT EXISTS labels(
@@ -50,6 +51,11 @@ def connect() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(_SCHEMA)
+    # self-migrations for databases created by older schemas
+    cols = {r[1] for r in con.execute("PRAGMA table_info(runs)")}
+    if "progress_vps" not in cols:
+        con.execute("ALTER TABLE runs ADD COLUMN progress_vps TEXT")
+        con.commit()
     return con
 
 
