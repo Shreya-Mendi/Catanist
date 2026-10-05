@@ -70,7 +70,13 @@ class _PointIndex:
         return len(self.pts) - 1
 
 
-def make_board(seed: int = 0) -> dict:
+def make_board(seed: int = 0, profile: str = "standard") -> dict:
+    """profile "scarce": a legal setup arrangement where ore and wheat tiles
+    carry the lowest-pip numbers and the abundant resources the highest, so
+    cities and dev cards are nearly unreachable through 4:1 banking alone and
+    player trade becomes the only realistic path (the E6 interdependence
+    lever). Interaction rules are untouched — this is board setup, like the
+    seed."""
     rng = random.Random(seed)
 
     # 1) hexes with shuffled resources + numbers
@@ -79,6 +85,23 @@ def make_board(seed: int = 0) -> dict:
     rng.shuffle(bag)
     numbers = _NUMBER_BAG[:]
     rng.shuffle(numbers)
+    if profile == "scarce":
+        # order number tokens by pip strength; starve ore+wheat, feed the rest
+        scarce_res = {"ore", "wheat"}
+        n_scarce = sum(1 for r in bag if r in scarce_res)
+        by_pip = sorted(numbers, key=pip_count)
+        weak, strong = by_pip[:n_scarce], by_pip[n_scarce:]
+        rng.shuffle(weak); rng.shuffle(strong)
+        wi = si = 0
+        rebuilt = []
+        for r in bag:
+            if r == "desert":
+                continue
+            if r in scarce_res:
+                rebuilt.append(weak[wi]); wi += 1
+            else:
+                rebuilt.append(strong[si]); si += 1
+        numbers = rebuilt
     hexes, robber = [], 0
     ni = 0
     for hid, (cx, cy) in enumerate(centers):

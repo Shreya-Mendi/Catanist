@@ -294,7 +294,22 @@ async function launch(){
 }
 
 /* ================= Watch ================= */
-let watchTimer=null, watchSnapshot="";
+let watchTimer=null, watchSnapshot="", picked=[];
+function pick(rid, el){
+  const i=picked.indexOf(rid);
+  if(i>=0) picked.splice(i,1); else { picked.push(rid); if(picked.length>2) picked.shift(); }
+  watchSnapshot=""; renderWatchBar();
+}
+function renderWatchBar(){
+  let bar=$("#cmpbar");
+  if(!bar){ bar=document.createElement("div"); bar.id="cmpbar";
+    bar.style.cssText="position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:40";
+    document.body.appendChild(bar); }
+  bar.innerHTML = picked.length===2
+    ? `<a class="ghost" style="background:#25313c;color:#fff;box-shadow:0 10px 24px rgba(37,49,60,.3);padding:12px 22px;border-radius:14px;font-size:15px"
+        href="/compare?a=${picked[0]}&b=${picked[1]}" target="_blank">Compare run #${picked[0]} vs #${picked[1]}</a>`
+    : picked.length===1 ? `<span class="chip">pick one more run to compare</span>` : "";
+}
 const crown=`<svg class="wicon"><use href="#i-crown"/></svg>`;
 function scoreChips(vps,winner){
   if(!vps) return "";
@@ -324,13 +339,21 @@ async function renderWatch(){
           <i style="width:${pct}%"></i></div></td>
         <td><span data-info="${esc(INFO.scores)}">${scoreChips(vps)}</span></td>
         <td>${r.status==='done'?`
-             <button class="ghost" onclick="showTranscript(${r.id})">transcript</button>
+             <button class="ghost" data-info="Pick two finished runs (any experiments, any arms) and a compare button appears." style="${picked.includes(r.id)?'background:#25313c;color:#fff':''}" onclick="pick(${r.id},this)">${picked.includes(r.id)?'picked ✓':'compare'}</button>
+             <a class="ghost" href="/run/${r.id}/transcript" target="_blank"
+                data-info="The verbatim research transcript: every decision with its full private reasoning, intent, plan, typed speech and engine adjudications.">transcript</a>
              ${scene?`<a class="ghost" href="/${scene}" target="_blank">replay</a>`:""}
              ${r.log_path?`<a class="ghost" data-info="The raw game log — the source of truth every metric is computed from." href="/${r.log_path}" target="_blank">json</a>`:""}`
+           : r.status==='running'?`<a class="ghost" href="/run/${r.id}/transcript" target="_blank"
+               data-info="Watch the transcript grow while the game plays — updates every few seconds.">live transcript</a>`
            : r.status==='failed'?`<span class="err mono">${esc((r.error||"").split("\n")[0].slice(0,70))}</span>`:""}</td></tr>`;
       }).join("");
+      const armRuns=d.runs.filter(r=>r.status==="done");
+      const tA=armRuns.find(r=>r.condition.includes("typed")), tB=armRuns.find(r=>r.condition.includes("free"));
       html+=`<div class="card"><h2>#${e.id} ${e.name}
-        <span class="badge dim">${e.hypothesis||""}</span></h2>
+        <span class="badge dim">${e.hypothesis||""}</span>
+        ${tA&&tB?`<a class="ghost" href="/compare?a=${tA.id}&b=${tB.id}" target="_blank"
+          data-info="The E1 view: the same seed played in both speech modes, statements aligned turn by turn.">typed vs free side-by-side</a>`:""}</h2>
         <p class="lede">by ${e.owner} · ${e.done||0} done / ${e.total} runs
         ${e.failed?` · <span class="err">${e.failed} failed</span>`:""}</p>
         <table><tr><th>run</th><th>condition</th><th>seed</th><th>status</th>
@@ -502,7 +525,9 @@ async function doExport(id){
 function renderGuide(){
   $("#tab-guide").innerHTML=`
   <div class="card"><h2>What this is</h2>
-    <p>Agents play Settlers of Catan and talk while they do it. The engine records
+    <p>This is the console for <b>MARA: Deception</b>, the TRUST Lab study of
+    deception in multi-agent AI systems (Catanist is the arena it runs on).
+    Agents play Settlers of Catan and talk while they do it. The engine records
     every <b>public statement</b> and every <b>action</b>, so a lie is a statement the
     speaker's own next move contradicts — no LLM judge anywhere. Each agent also
     writes a private intent line and a 3-step plan that <b>only the log ever sees</b>;

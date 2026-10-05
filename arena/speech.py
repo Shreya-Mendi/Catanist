@@ -60,8 +60,8 @@ def validate_plan(raw) -> tuple[list[dict], int]:
         return steps, untyped
     for item in list(raw)[:PLAN_MAX_STEPS]:
         s = _clip(item, PLAN_STEP_MAX_CHARS)
-        if not s:
-            continue
+        if not s or s.lower().startswith("end_turn"):
+            continue                     # end_turn is filler, not a plan
         typed = any(s.split()[0].lower().startswith(v) for v in PLAN_VERBS) if s.split() else False
         if not typed:
             untyped += 1

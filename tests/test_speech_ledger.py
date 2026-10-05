@@ -32,8 +32,8 @@ def test_speech():
     assert is_checkable({"type": "claim", "resource": "ore", "has": True})
     assert not is_checkable({"type": "announce", "text": "hi"})
     steps, untyped = validate_plan(["build_road toward port", "trade for ore", "end_turn"])
-    assert len(steps) == 3 and steps[0]["typed"] and steps[2]["typed"]
-    assert untyped == 1 and not steps[1]["typed"]  # "trade" is not a legal verb prefix
+    assert len(steps) == 2, "end_turn steps are filler and must be dropped (2026-09-28 addendum)"
+    assert steps[0]["typed"] and untyped == 1 and not steps[1]["typed"]  # "trade" not a legal verb
 
 # --- ledger scripted game: expected terminal states declared up front ----------
 def test_ledger():
@@ -68,6 +68,16 @@ def test_ledger():
     assert p6["opportunities"] == 0          # never placed the robber: kept but untested
     res = L.drain()
     assert len(res) == 6 and not L.drain()
+
+    # declined rule (2026-09-28b): a genuine in-window offer refused by the
+    # target resolves as DECLINED, never broken
+    L3 = PromiseLedger()
+    L3.register({"act": "will_trade", "target": "Bo", "window": 1,
+                 "resource": "wood"}, "Ana", global_turn=20)
+    L3.note_trade_proposal("Ana", "Bo", {"wood": 1}, 21)   # she offered; Bo said no
+    L3.tick_own_turn_end("Ana", {"wood": 2}, 24)
+    assert L3.promises[0]["status"] == "declined", L3.promises[0]["status"]
+    assert L3.promises[0]["attempts"] == 1
 
     # same-turn clock rule: a window-1 promise made during your own turn is NOT
     # expired at that same turn's end — it survives until your next turn ends.

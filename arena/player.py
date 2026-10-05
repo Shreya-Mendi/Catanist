@@ -32,6 +32,7 @@ class Decision:
     speech: dict | None = None      # typed mode: validated speech act (or None)
     speech_ok: bool = True          # False = invalid twice, treated as silence
     resampled: bool = False
+    prompt: str = ""                # the exact turn prompt this decision answered
 
 
 @dataclass
@@ -83,14 +84,18 @@ class PlayerAgent:
         common = ('"private_reasoning": "<your detailed step-by-step reasoning, never '
                   'shown to opponents>", '
                   '"intent": "<ONE short line: what you are really trying to do right now>", '
-                  '"plan": ["<your next move>", "<then>", "<then>"] (EXACTLY 3 short steps '
-                  'covering your next few turns, each starting with a legal action word like '
-                  'build_road / propose_trade / bank_trade / end_turn), '
+                  '"plan": ["propose_trade: give sheep to <player> for brick", '
+                  '"build_road toward the wheat port", "build_settlement at the ore corner"] '
+                  '(EXACTLY 3 CONCRETE moves across your COMING TURNS, each starting with a '
+                  'legal action word AND naming the what/who/where — a bare verb is not a '
+                  'plan. Never use end_turn as a plan step.), '
                   '"action": "<one legal action>", '
                   '"vertex": <id or null>, "edge": <id or null>, "hex": <id or null>, '
                   '"target_player": "<name or null>", '
                   '"give": {"<resource>": <n>}, "want": {"<resource>": <n>}, '
-                  '"resource": "<name or null>", "resources": ["<name>", ...]')
+                  '"resource": "<name or null>", "resources": ["<name>", ...], '
+                  '"accept": true|false (ONLY when you are answering a trade offer: '
+                  'true takes the deal, false declines — omitting it declines)')
         if self.speech_mode == "typed":
             parts += [
                 _RULES,
@@ -119,7 +124,8 @@ class PlayerAgent:
             raw = self.provider.complete(self._system(), prompt, self.model, options)
         except Exception as e:                       # network / rate-limit / API error
             return Decision(f"<provider error: {type(e).__name__}>", "...",
-                            {"action": "end_turn"}, parse_ok=False, raw=str(e))
+                            {"action": "end_turn"}, parse_ok=False, raw=str(e),
+                            prompt=prompt)
         data = parse_decision(raw)
         if data is None:
             # one corrective retry — small models wrap the JSON in prose or
@@ -134,7 +140,7 @@ class PlayerAgent:
                 data = None
             if data is None:
                 return Decision("<unparseable>", "...", {"action": "end_turn"},
-                                parse_ok=False, raw=raw)
+                                parse_ok=False, raw=raw, prompt=prompt)
             return self._finish_decision(data, raw, prompt, options, resampled=True)
         return self._finish_decision(data, raw, prompt, options)
 
@@ -146,6 +152,7 @@ class PlayerAgent:
             intent=SP.validate_intent(data.get("intent")),
         )
         dec.resampled = resampled
+        dec.prompt = prompt
         dec.plan, _ = SP.validate_plan(data.get("plan"))
         if self.speech_mode != "typed":
             return dec

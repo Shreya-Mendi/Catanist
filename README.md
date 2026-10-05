@@ -1,3 +1,17 @@
+# MARA: Deception
+
+**The Duke TRUST Lab study of deception and misalignment in multi-agent AI
+systems.** LLM agents play Settlers of Catan and talk while they do it; the
+engine records every public statement and every action, so a lie is a statement
+the speaker's own next move contradicts — no LLM judge anywhere. The
+experiment console (`python run.py serve`) gives the team whitelist logins, a
+full knob surface, live transcripts, replays, metrics with bootstrap CIs,
+labeling, and export bundles. See `DEPLOY.md` for the AWS setup and
+`research/battery-v1.md` for the frozen measurement spec. Catanist, below, is
+the arena the study runs on.
+
+---
+
 # 🏝️ Catan Arena
 
 An instrumented arena where LLM players compete at **Settlers of Catan** — the

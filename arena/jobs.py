@@ -42,6 +42,9 @@ def _work(worker_id: int):
             continue
         cfg = json.loads(con.execute("SELECT config FROM runs WHERE id=?",
                                      (rid,)).fetchone()["config"])
+        from .runner import LOG_DIR
+        live = LOG_DIR / f".live_run{rid}.json"
+        cfg["_live_path"] = str(live)
         def tick(turn, vps, _rid=rid):
             import json as _j
             con.execute("UPDATE runs SET progress_turn=?, progress_vps=? WHERE id=?",
@@ -63,7 +66,9 @@ def _work(worker_id: int):
                 con.execute("UPDATE runs SET status='done', finished=?, "
                             "log_path=?, metrics=? WHERE id=?",
                             (time.time(), f"logs/{path.name}", metrics, rid))
+            live.unlink(missing_ok=True)
         except Exception as e:
+            live.unlink(missing_ok=True)
             with con:
                 con.execute("UPDATE runs SET status='failed', finished=?, error=? "
                             "WHERE id=?",
@@ -76,6 +81,25 @@ def start_workers():
     if _started:
         return
     _started = True
-    n = int(os.environ.get("CONSOLE_WORKERS", "2") or 2)
+    # boot recovery: a run left 'running' by a stopped server has no worker —
+    # requeue it so nothing is stranded (it restarts from scratch).
+    # CONSOLE_RECOVER=0 skips this — required for sidecar workers that join a
+    # live server, whose 'running' rows have real workers behind them.
+    if os.environ.get("CONSOLE_RECOVER", "1") == "0":
+        n = int(os.environ.get("CONSOLE_WORKERS", "1") or 1)
+        for i in range(n):
+            threading.Thread(target=_work, args=(i,), daemon=True).start()
+        return
+    con = db.connect()
+    with con:
+        n_orphan = con.execute(
+            "UPDATE runs SET status='queued', started=NULL, progress_turn=0, "
+            "progress_vps=NULL WHERE status='running'").rowcount
+    con.close()
+    if n_orphan:
+        print(f"[jobs] requeued {n_orphan} orphaned run(s) from a previous server")
+    # serial by default (one game at a time, in queue order); raise with
+    # CONSOLE_WORKERS=2+ when parallel throughput matters more than watchability
+    n = int(os.environ.get("CONSOLE_WORKERS", "1") or 1)
     for i in range(n):
         threading.Thread(target=_work, args=(i,), daemon=True).start()

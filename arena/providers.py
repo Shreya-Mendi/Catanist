@@ -237,6 +237,9 @@ class OpenAIProvider(Provider):
     by delegating to the same complete() implementation."""
 
     name = "openai"
+    RETRIES = 3
+    BACKOFF = (4, 10, 20)
+    _last_call = 0.0
 
     def __init__(self):
         import openai  # lazy
@@ -353,6 +356,68 @@ class GoogleProvider(GitHubModelsProvider):
         self.client = openai.OpenAI(base_url=self.BASE_URL, api_key=key)
 
 
+class TinkerProvider(Provider):
+    """Thinking Machines' Tinker — OSS models for sampling now and the E5
+    LoRA training arm later. Key: TINKER_API_KEY (read by the SDK from env).
+    Chat formatting uses the model tokenizer's own chat template; Qwen3-style
+    thinking is disabled when the template supports it, and any <think> block
+    is stripped before JSON extraction so braces inside reasoning cannot
+    confuse the decision parser."""
+
+    name = "tinker"
+    RETRIES = 2
+
+    def __init__(self):
+        import tinker  # lazy
+        if not os.environ.get("TINKER_API_KEY"):
+            raise RuntimeError("Tinker needs TINKER_API_KEY in Catanist/.env")
+        self._tinker = tinker
+        self._svc = tinker.ServiceClient()
+        self._samplers: dict[str, object] = {}
+        self._tokenizers: dict[str, object] = {}
+
+    def _sampler(self, model):
+        if model not in self._samplers:
+            self._samplers[model] = self._svc.create_sampling_client(base_model=model)
+            self._tokenizers[model] = self._samplers[model].get_tokenizer()
+        return self._samplers[model], self._tokenizers[model]
+
+    def complete(self, system, user, model, options):
+        import re as _re
+        import time
+        from tinker import types
+        last = None
+        for attempt in range(self.RETRIES):
+            try:
+                sc, tok = self._sampler(model)
+                msgs = [{"role": "system", "content": system},
+                        {"role": "user", "content": user}]
+                try:
+                    ids = tok.apply_chat_template(msgs, add_generation_prompt=True,
+                                                  enable_thinking=False)
+                except TypeError:
+                    ids = tok.apply_chat_template(msgs, add_generation_prompt=True)
+                # tokenizers may hand back a BatchEncoding rather than a list
+                if hasattr(ids, "keys"):
+                    ids = ids["input_ids"]
+                if ids and isinstance(ids[0], (list, tuple)):
+                    ids = ids[0]
+                prompt = types.ModelInput.from_ints(list(ids))
+                params = types.SamplingParams(max_tokens=1100, temperature=0.8)
+                fut = sc.sample(prompt=prompt, sampling_params=params, num_samples=1)
+                result = fut.result() if hasattr(fut, "result") else fut
+                text = tok.decode(result.sequences[0].tokens)
+                for end in ("<|im_end|>", "<|endoftext|>", "</s>"):
+                    text = text.split(end)[0]
+                return _re.sub(r"<think>.*?</think>", "", text, flags=_re.S).strip()
+            except Exception as e:
+                last = e
+                if attempt == self.RETRIES - 1:
+                    raise
+                time.sleep(5)
+        raise last
+
+
 # provider-name -> factory. Add rows here to support more backends.
 _REGISTRY = {
     "mock": MockProvider,
@@ -360,6 +425,7 @@ _REGISTRY = {
     "openai": OpenAIProvider,
     "github": GitHubModelsProvider,
     "hf": HFRouterProvider,
+    "tinker": TinkerProvider,
     "google": GoogleProvider,
 }
 

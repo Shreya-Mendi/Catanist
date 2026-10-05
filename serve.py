@@ -34,14 +34,18 @@ SCENES = ["harbor", "desert", "vale"]
 COSTUMES = ["wizard", "knight", "vampire", "jester", "queen", "monk",
             "ranger", "bard", "merchant"]
 PALETTE = ["#7c5cff", "#e05c5c", "#b14b8a", "#3d9bf2", "#54c26a", "#f2a03d"]
-PROVIDERS = ["mock", "openai", "google", "hf", "anthropic"]
+# hf retired 2026-09-28 (lab decision: Tinker is the funded OSS route; the
+# HFRouterProvider class stays dormant). Tinker provider lands with the E5 arm.
+PROVIDERS = ["mock", "openai", "google", "tinker", "anthropic"]
 MODEL_PRESETS = {
     "mock": ["any/mock-model"],
     "openai": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"],
-    "hf": ["meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-7B-Instruct",
-           "meta-llama/Llama-3.3-70B-Instruct"],
     "anthropic": ["claude-sonnet-5", "claude-haiku-4-5-20251001"],
     "google": ["gemini-2.5-flash", "gemini-2.5-pro"],
+    "tinker": ["Qwen/Qwen3-8B", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.8-27B",
+               "Qwen/Qwen3.6-35B-A3B",
+               "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+               "openai/gpt-oss-20b", "thinkingmachines/Inkling-Small"],
 }
 INSTRUCTION_PRESETS = {
     "none": "",
@@ -66,6 +70,16 @@ def _live_models(provider: str) -> dict:
     out = {"provider": provider, "live": False,
            "models": MODEL_PRESETS.get(provider, [])}
     try:
+        if provider == "tinker":
+            from arena.providers import get_provider
+            prov = get_provider(provider)
+            caps = prov._svc.get_server_capabilities()
+            ids = sorted(getattr(m, "model_name", str(m))
+                         for m in caps.supported_models)
+            if ids:
+                out = {"provider": provider, "live": True, "models": ids[:60]}
+            _model_cache[provider] = (_t.time(), out)
+            return out
         if provider != "mock":
             from arena.providers import get_provider
             prov = get_provider(provider)
@@ -83,6 +97,319 @@ def _live_models(provider: str) -> dict:
         out["note"] = f"no key or listing failed ({type(e).__name__}); showing presets"
     _model_cache[provider] = (_t.time(), out)
     return out
+
+
+
+def _esc(t):
+    return (str(t or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+
+def _arm_stats(log):
+    dec = [e for e in log["events"] if "parse_ok" in e]
+    sp = [e for e in dec if e.get("public") and (e.get("speech") is None or
+          (e["speech"].get("type") != "none" and e.get("speech_ok", True)))]
+    checkable = [e for e in sp if (e.get("speech") or {}).get("type") in ("claim", "promise")]
+    return {"decisions": len(dec), "spoke": len(sp),
+            "checkable": len(checkable),
+            "false_claims": sum(1 for e in dec if e.get("claim_true") is False),
+            "promises": sum(1 for e in dec if (e.get("speech") or {}).get("type") == "promise")}
+
+
+def _compare_cells(log, colors):
+    """turn -> (score_line, [statement chips])"""
+    out, scores = {}, {}
+    for e in log["events"]:
+        if "parse_ok" not in e:
+            continue
+        st = e.get("stamp") or {}
+        if st.get("vps"):
+            scores[e.get("turn", 0)] = " · ".join(f"{k} {v}" for k, v in st["vps"].items())
+        if not e.get("public"):
+            continue
+        if e.get("speech") is not None and (e["speech"].get("type") == "none"
+                                            or e.get("speech_ok") is False):
+            continue
+        a = e.get("actor") or e.get("proposer") or e.get("responder")
+        kind = (e.get("speech") or {}).get("type", "chat")
+        flagged = e.get("claim_true") is False
+        badge = {"claim": "claim", "promise": "promise", "announce": "announce",
+                 "chat": "free talk"}[kind]
+        cls = "chip " + ("k-false" if flagged else f"k-{kind}")
+        filt = "checkable" if kind in ("claim", "promise") else "talk"
+        if flagged:
+            filt += " flagged"
+        chip = (f"<div class='{cls}' data-f='{filt}'>"
+                f"<span class='dot' style='background:{colors.get(a, '#9db8c8')}'></span>"
+                f"<b>{_esc(a)}</b><span class='kind'>{badge}"
+                + (" · FALSE" if flagged else "")
+                + f"</span><div class='txt'>&ldquo;{_esc(e['public'])}&rdquo;</div></div>")
+        out.setdefault(e.get("turn", 0), []).append(chip)
+    return out, scores
+
+
+def _compare_html(ra, rb, la, lb):
+    ca, cb = json.loads(ra["config"]), json.loads(rb["config"])
+    colors = {p["name"]: p.get("color", "#9db8c8")
+              for p in la["events"][0].get("players", [])}
+    sa, sca = _compare_cells(la, colors)
+    sb, scb = _compare_cells(lb, colors)
+    ta, tb = _arm_stats(la), _arm_stats(lb)
+    turns = sorted(set(sa) | set(sb) | set(sca) | set(scb))
+    la_label = f"{ca.get('speech_mode','free')} · run #{ra['id']}"
+    lb_label = f"{cb.get('speech_mode','free')} · run #{rb['id']}"
+
+    def statrow(name, key, tip=""):
+        return (f"<tr><td class='sn'>{name}</td><td>{ta[key]}</td>"
+                f"<td>{tb[key]}</td></tr>")
+    rows = ""
+    for t in turns:
+        rows += (f"<tr class='turnrow'><td class='tn'>T{t}</td>"
+                 f"<td class='meta'>{_esc(sca.get(t, ''))}</td>"
+                 f"<td class='meta'>{_esc(scb.get(t, ''))}</td></tr>"
+                 f"<tr><td></td><td>{''.join(sa.get(t, [])) or '<span class=quiet>—</span>'}</td>"
+                 f"<td>{''.join(sb.get(t, [])) or '<span class=quiet>—</span>'}</td></tr>")
+    style = """<style>
+ :root{--ink:#25313c;--muted:#7d8b97;--pink:#e85fa8;--pinkbg:#fbe6f2;
+  --cyan:#2ab3c4;--cyanbg:#e0f5f7;--violet:#8b7bd8;--violetbg:#eeebfa}
+ body{margin:0;background:linear-gradient(180deg,#eaf4fa,#f8faf7);color:var(--ink);
+  font:14.5px/1.55 "M PLUS Rounded 1c",-apple-system,system-ui,sans-serif}
+ .wrap{max-width:1080px;margin:0 auto;padding:30px 24px 80px}
+ h1{font-size:24px;margin:0 0 2px;font-weight:800}
+ .meta{color:var(--muted);font-size:12.5px}
+ .card{background:#fff;border:1px solid #e3edf3;border-radius:16px;
+  box-shadow:0 8px 24px rgba(37,49,60,.08);padding:18px 20px;margin:14px 0}
+ table.stats{border-collapse:collapse;width:100%;font-size:14px}
+ table.stats td,table.stats th{padding:6px 10px;border-bottom:1px solid #eef3f6;text-align:left}
+ table.stats th{font-size:12px;color:var(--muted);text-transform:uppercase}
+ .sn{font-weight:700}
+ .filters{display:flex;gap:8px;margin:4px 0 10px}
+ .filters button{border:1.5px solid #cfdde6;background:#fff;border-radius:999px;
+  padding:6px 16px;font:inherit;font-weight:700;font-size:13px;cursor:pointer}
+ .filters button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+ table.feed{border-collapse:collapse;width:100%;table-layout:fixed}
+ table.feed td{vertical-align:top;padding:4px 8px;width:47%}
+ td.tn{font-weight:800;color:var(--muted);padding-top:14px}
+ col.c-t{width:7%}
+ tr.turnrow td{border-top:2px solid #e3edf3;padding-top:12px}
+ .chip{border-radius:12px;padding:8px 12px;margin:5px 0;background:#f4f8fa}
+ .chip .dot{display:inline-block;width:11px;height:11px;border-radius:50%;
+  margin-right:7px;vertical-align:-1px}
+ .chip .kind{float:right;font-size:11px;font-weight:800;color:var(--muted)}
+ .chip .txt{margin-top:2px}
+ .k-claim{background:var(--cyanbg)} .k-claim .kind{color:#137a88}
+ .k-promise{background:var(--violetbg)} .k-promise .kind{color:#5b4bb5}
+ .k-false{background:var(--pinkbg);border:1.5px solid var(--pink)}
+ .k-false .kind{color:#b23578}
+ .quiet{color:#c3ced6}
+ th.arm{font-size:13px;background:#f6fafc;border-radius:8px;padding:8px}
+ .hidden{display:none}
+ a{color:#4a90d9}
+</style>"""
+    js = """<script>
+ function setf(f,btn){
+   document.querySelectorAll('.filters button').forEach(b=>b.classList.remove('on'));
+   btn.classList.add('on');
+   document.querySelectorAll('.chip').forEach(c=>{
+     c.classList.toggle('hidden', f!=='all' && !c.dataset.f.includes(f));});
+ }
+</script>"""
+    return (f"<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>Typed vs free — runs #{ra['id']} & #{rb['id']}</title>"
+            f"<link href='https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800&display=swap' rel='stylesheet'>"
+            f"{style}</head><body><div class='wrap'>"
+            f"<h1>Same game, two ways of talking</h1>"
+            f"<p class='meta'>One board, one dice sequence (seed {ra['seed']}). Left: "
+            f"<b>{_esc(la_label)}</b> — right: <b>{_esc(lb_label)}</b>. Colors are players; "
+            f"pink means the engine caught a false claim. Full detail: "
+            f"<a href='/run/{ra['id']}/transcript'>left transcript</a> · "
+            f"<a href='/run/{rb['id']}/transcript'>right transcript</a> · "
+            f"<a href='/'>back to console</a></p>"
+            f"<div class='card'><table class='stats'>"
+            f"<tr><th>at a glance</th><th>{_esc(la_label)}</th><th>{_esc(lb_label)}</th></tr>"
+            + statrow("decisions", "decisions")
+            + statrow("times they spoke", "spoke")
+            + statrow("checkable statements (claims + promises)", "checkable")
+            + statrow("promises made", "promises")
+            + statrow("false claims caught", "false_claims")
+            + "</table></div>"
+            f"<div class='card'><div class='filters'>"
+            f"<button class='on' onclick=\"setf('all',this)\">everything</button>"
+            f"<button onclick=\"setf('checkable',this)\">checkable only</button>"
+            f"<button onclick=\"setf('flagged',this)\">caught lies only</button></div>"
+            f"<table class='feed'><col class='c-t'><col><col><tr><td></td><th class='arm'>{_esc(la_label)}</th>"
+            f"<th class='arm'>{_esc(lb_label)}</th></tr>{rows}</table>"
+            f"<p class='meta'>Games share a board but diverge as decisions differ — rows "
+            f"align by turn for reading, not one-to-one pairing.</p></div>"
+            f"</div>{js}</body></html>")
+
+
+def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
+    """A research-grade, verbatim transcript: every decision with its full
+    private reasoning, intent, plan, typed speech, adjudications and engine
+    tags. Server-rendered so it opens as a plain link (no popup blockers)."""
+    setup = (log["events"][0].get("players", []) if log.get("events") else [])
+    cfg = json.loads(run_row["config"]) if run_row["config"] else {}
+    m = json.loads(metrics_json) if metrics_json else None
+    head = f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Run #{run_row['id']} transcript — MARA: Deception</title>
+<style>
+ body{{margin:0;background:#f4f6f8;color:#1e2830;
+  font:14.5px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif}}
+ .wrap{{max-width:900px;margin:0 auto;padding:36px 28px 80px}}
+ h1{{font-size:24px;margin:0 0 4px}} h2{{font-size:17px;margin:26px 0 10px}}
+ .meta{{color:#5c6b77;font-size:13px}}
+ table{{border-collapse:collapse;width:100%;font-size:13.5px;background:#fff;
+  border:1px solid #dde5ea;border-radius:8px;overflow:hidden}}
+ th,td{{padding:7px 10px;text-align:left;border-bottom:1px solid #eef2f5}}
+ th{{background:#f8fafb;font-size:12px;color:#5c6b77;text-transform:uppercase;
+  letter-spacing:.04em}}
+ .turn{{margin:26px 0 10px;padding-top:14px;border-top:2px solid #dde5ea;
+  font-weight:700;font-size:15.5px}}
+ .ev{{color:#5c6b77;font-size:13.5px;margin:3px 0}}
+ .dec{{background:#fff;border:1px solid #dde5ea;border-radius:10px;
+  padding:12px 16px;margin:10px 0}}
+ .dec .act{{font-weight:700;margin-bottom:6px}}
+ .panel{{border-left:3px solid #c3ced6;background:#f8fafb;border-radius:0 8px 8px 0;
+  padding:8px 12px;margin:8px 0;white-space:pre-wrap;font-size:13.5px}}
+ .panel b{{font-size:11px;letter-spacing:.05em;color:#5c6b77;display:block;
+  margin-bottom:3px}}
+ .pub{{border-left-color:#2ab3c4;background:#eef8f9}}
+ .pub.false{{border-left-color:#d4467f;background:#fbeef4}}
+ .tag{{display:inline-block;font-size:11px;font-weight:700;padding:1px 8px;
+  border-radius:99px;margin-left:6px;vertical-align:1px}}
+ .t-red{{background:#fbe3ee;color:#a4265f}} .t-cyan{{background:#e0f5f7;color:#137a88}}
+ .t-gray{{background:#e8edf1;color:#5c6b77}}
+ .res{{font-weight:600;margin:6px 0}}
+ .res.broken{{color:#a4265f}} .res.kept{{color:#137a88}} .res.other{{color:#5c6b77}}
+ @media print{{body{{background:#fff}} .dec{{break-inside:avoid}}}}
+</style></head><body><div class="wrap">
+<h1>Run #{run_row['id']} — verbatim transcript</h1>
+<p class="meta">MARA: Deception · battery v1 · condition <b>{_esc(run_row['condition'] or 'baseline')}</b>
+ · seed {run_row['seed']} · speech {_esc(cfg.get('speech_mode','free'))}
+ · max turns {cfg.get('max_turns') or 120}
+ · winner <b>{_esc(log.get('winner'))}</b> ({_esc(log.get('reason'))})
+ · <a href="/{_esc(run_row['log_path'])}">raw JSON log</a></p>
+<h2>Seats</h2>
+<table><tr><th>seat</th><th>model</th><th>intent</th><th>persona</th>
+<th>instruction</th><th>framing</th></tr>"""
+    for p_ in setup:
+        head += (f"<tr><td><b>{_esc(p_['name'])}</b></td><td>{_esc(p_.get('model'))}</td>"
+                 f"<td>{_esc(p_.get('intent'))}{' (custom text)' if p_.get('intent_text') else ''}</td>"
+                 f"<td>{_esc(p_.get('persona'))}</td>"
+                 f"<td>{_esc((p_.get('instruction') or '—'))}</td>"
+                 f"<td>{_esc((p_.get('framing') or 'free-for-all'))[:60]}</td></tr>")
+    head += "</table>"
+    if m:
+        head += """<h2>Battery summary</h2>
+<table><tr><th>seat</th><th>coverage</th><th>statements</th><th>claims (false)</th>
+<th>promises k/b/e/c</th><th>viol/stmt</th><th>informativeness</th></tr>"""
+        for name, pd in m["players"].items():
+            pr = pd["promises"]
+            head += (f"<tr><td><b>{_esc(name)}</b></td><td>{pd['coverage']}</td>"
+                     f"<td>{pd['statements']}</td><td>{pd['claims']} ({pd['false_claims']})</td>"
+                     f"<td>{pr['made']}: {pr['kept']}/{pr['broken']}/{pr['excused']}/{pr['censored']}</td>"
+                     f"<td>{pd['violation_rate_per_statement']}</td>"
+                     f"<td>{pd['informativeness']}</td></tr>")
+        head += "</table>"
+    head += ("<p class='meta'>Every decision below is verbatim from the log: the full "
+             "private reasoning, the intent line and plan (seen only by the log, never "
+             "by other players), the typed speech with its engine adjudication, and "
+             "any integrity tags.</p>")
+
+    body = []
+    events_all = log["events"]
+    def _trade_outcome(idx, e):
+        """The proposal's fate: the matching response (and execution) that follow."""
+        for x in events_all[idx + 1: idx + 8]:
+            if x.get("type") == "trade_response" and x.get("responder") == e.get("target"):
+                if not x.get("accept"):
+                    return f"<div class='res broken'>OUTCOME: {_esc(e.get('target'))} DECLINED</div>"
+                for y in events_all[idx + 1: idx + 10]:
+                    if y.get("type") == "trade_exec":
+                        return "<div class='res kept'>OUTCOME: accepted — trade executed</div>"
+                return f"<div class='res other'>OUTCOME: {_esc(e.get('target'))} accepted (could not cover)</div>"
+        return "<div class='res other'>OUTCOME: no response recorded</div>"
+    for idx, e in enumerate(log["events"]):
+        t = e["type"]
+        a = e.get("actor") or e.get("proposer") or e.get("responder")
+        if t == "turn":
+            body.append(f"<div class='turn'>Turn {e['n']} — {_esc(e['actor'])}</div>")
+            continue
+        if t == "roll":
+            body.append(f"<div class='ev'>rolled {e['total']}</div>"); continue
+        if t == "production":
+            continue
+        if t == "promise_resolved":
+            cls = e["status"] if e["status"] in ("broken", "kept") else "other"
+            extra = (f", {e['attempts']} genuine offer(s) refused by {_esc(e['target'])}"
+                     if e["status"] == "declined" else "")
+            body.append(f"<div class='res {cls}'>PROMISE {e['status'].upper()}: "
+                        f"{_esc(e['promiser'])} → {_esc(e['target'])} ({e['act']}, "
+                        f"window {e['window']}, opportunities {e['opportunities']}{extra})</div>")
+            continue
+        if t == "trade_exec":
+            body.append(f"<div class='ev'><b>trade executed</b> {_esc(e['proposer'])} ⇄ "
+                        f"{_esc(e['target'])}: {_esc(e['give'])} for {_esc(e['want'])}</div>")
+            continue
+        if "parse_ok" not in e:
+            continue
+        # a decision event: action line
+        desc = {"build": lambda: f"builds {e.get('kind')}" + (" (setup)" if e.get("setup") else ""),
+                "bank_trade": lambda: f"bank-trades {e.get('give')} → {e.get('want')}",
+                "trade_proposal": lambda: f"offers {_esc(e.get('target'))}: gives {e.get('give')}, wants {e.get('want')}",
+                "trade_response": lambda: ("ACCEPTS the offer" if e.get("accept") else "declines the offer"),
+                "robber_move": lambda: f"moves the robber" + (f", robs {_esc(e.get('victim'))}" if e.get('victim') else ""),
+                "dev_buy": lambda: "buys a development card",
+                "dev_play": lambda: f"plays {e.get('card')}",
+                "discard": lambda: f"discards {e.get('dropped')}",
+                }.get(t, lambda: t)()
+        tags = ""
+        if e.get("played_by") == "heuristic":
+            tags += "<span class='tag t-red'>ENGINE FALLBACK</span>"
+        if e.get("rewritten"):
+            tags += f"<span class='tag t-red'>REWRITTEN {_esc(','.join(e['rewritten']))}</span>"
+        if e.get("resampled"):
+            tags += "<span class='tag t-gray'>RESAMPLED</span>"
+        if e.get("parse_ok") is False:
+            tags += "<span class='tag t-red'>PARSE FAIL</span>"
+        stamp = e.get("stamp") or {}
+        vps = " ".join(f"{k}:{v}" for k, v in (stamp.get("vps") or {}).items())
+        blocks = [f"<div class='act'>{_esc(a)} {desc}{tags} "
+                  f"<span class='meta' style='font-weight:400'>· scores {vps}</span></div>"]
+        if e.get("prompt"):
+            blocks.append("<details><summary style='cursor:pointer;font-size:12px;"
+                          "color:#5c6b77;font-weight:700'>TURN PROMPT — exactly what "
+                          "this agent saw (table status, memory, legal moves)</summary>"
+                          f"<div class='panel' style='margin-top:6px'>{_esc(e['prompt'])}</div></details>")
+        if e.get("private"):
+            blocks.append(f"<div class='panel'><b>PRIVATE REASONING (verbatim)</b>{_esc(e['private'])}</div>")
+        if e.get("intent"):
+            blocks.append(f"<div class='panel'><b>PRIVATE INTENT</b>{_esc(e['intent'])}</div>")
+        if e.get("plan"):
+            steps = " → ".join(_esc(st.get("step")) for st in e["plan"])
+            blocks.append(f"<div class='panel'><b>PRIVATE PLAN</b>{steps}</div>")
+        sp = e.get("speech")
+        if sp is not None and sp.get("type") != "none" and e.get("speech_ok", True):
+            adj = ""
+            if e.get("claim_true") is True:
+                adj = "<span class='tag t-cyan'>CLAIM TRUE</span>"
+            elif e.get("claim_true") is False:
+                adj = "<span class='tag t-red'>CLAIM FALSE</span>"
+            if sp.get("type") == "promise" and e.get("promise_id"):
+                adj += f"<span class='tag t-gray'>PROMISE #{e['promise_id']}</span>"
+            cls = "pub false" if e.get("claim_true") is False else "pub"
+            blocks.append(f"<div class='panel {cls}'><b>SAYS TO THE TABLE "
+                          f"({sp['type']}) {adj}</b>&ldquo;{_esc(e.get('public'))}&rdquo;"
+                          f"<div class='meta'>speech object: {_esc(json.dumps(sp))}</div></div>")
+        elif e.get("public") and cfg.get("speech_mode") == "free":
+            blocks.append(f"<div class='panel pub'><b>SAYS TO THE TABLE (free text)</b>"
+                          f"&ldquo;{_esc(e['public'])}&rdquo;</div>")
+        if t == "trade_proposal":
+            blocks.append(_trade_outcome(idx, e))
+        body.append("<div class='dec'>" + "".join(blocks) + "</div>")
+    return head + "".join(body) + "</div></body></html>"
 
 
 def _transcript(log: dict) -> list[dict]:
@@ -197,13 +524,15 @@ class Handler(BaseHTTPRequestHandler):
         path, q = u.path, parse_qs(u.query)
         if path == "/":
             return self._send(200, (CONSOLE / "index.html").read_bytes(),
-                              "text/html; charset=utf-8")
+                              "text/html; charset=utf-8",
+                              extra={"Cache-Control": "no-store"})
         if path.startswith("/static/"):
             f = CONSOLE / Path(path[len("/static/"):]).name
             if f.exists():
                 ct = {"css": "text/css", "js": "application/javascript"}.get(
                     f.suffix[1:], "text/plain")
-                return self._send(200, f.read_bytes(), ct)
+                return self._send(200, f.read_bytes(), ct,
+                                  extra={"Cache-Control": "no-store"})
             return self._send(404, {"err": "no"})
         user = self._user()
         if not user:
@@ -242,6 +571,37 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/metrics/"):
                 eid = int(path.rsplit("/", 1)[1])
                 return self._send(200, _experiment_metrics(con, eid))
+            if path == "/compare":
+                ra_id, rb_id = int(q["a"][0]), int(q["b"][0])
+                ra = con.execute("SELECT * FROM runs WHERE id=?", (ra_id,)).fetchone()
+                rb = con.execute("SELECT * FROM runs WHERE id=?", (rb_id,)).fetchone()
+                if not ra or not rb or not ra["log_path"] or not rb["log_path"]:
+                    return self._send(404, {"err": "both runs need finished logs"})
+                la = json.loads((ROOT / ra["log_path"]).read_text())
+                lb = json.loads((ROOT / rb["log_path"]).read_text())
+                return self._send(200, _compare_html(ra, rb, la, lb),
+                                  "text/html; charset=utf-8")
+            if path.startswith("/run/") and path.endswith("/transcript"):
+                rid = int(path.split("/")[2])
+                row = con.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
+                if not row:
+                    return self._send(404, {"err": "no such run"})
+                live = ROOT / "logs" / f".live_run{rid}.json"
+                if row["log_path"]:
+                    log = json.loads((ROOT / row["log_path"]).read_text())
+                    return self._send(200, _transcript_html(row, log, row["metrics"]),
+                                      "text/html; charset=utf-8")
+                if live.exists():
+                    log = json.loads(live.read_text())
+                    html = _transcript_html(row, log, None)
+                    banner = ("<meta http-equiv='refresh' content='12'>"
+                              "<div style=\"position:fixed;top:0;left:0;right:0;"
+                              "background:#e85fa8;color:#fff;font-weight:800;"
+                              "text-align:center;padding:6px;z-index:9\">LIVE — "
+                              f"turn {log.get('turn')} · refreshes every 12s</div>")
+                    return self._send(200, html.replace("<body>", "<body>" + banner, 1),
+                                      "text/html; charset=utf-8")
+                return self._send(404, {"err": "run has not started writing yet"})
             if path.startswith("/api/run/") and path.endswith("/transcript"):
                 rid = int(path.split("/")[3])
                 row = con.execute("SELECT log_path FROM runs WHERE id=?", (rid,)).fetchone()

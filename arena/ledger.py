@@ -39,7 +39,7 @@ class PromiseLedger:
             "window": speech["window"], "own_turns_left": speech["window"],
             "made_turn": global_turn, "status": "open",
             "opportunities": 0, "held_resource_ever": False,
-            "resolved_turn": None,
+            "attempts": 0, "resolved_turn": None,
         })
         return pid
 
@@ -56,7 +56,7 @@ class PromiseLedger:
             "promiser": p["promiser"], "target": p["target"], "act": p["act"],
             "resource": p["resource"], "status": status,
             "window": p["window"], "made_turn": p["made_turn"],
-            "opportunities": p["opportunities"],
+            "opportunities": p["opportunities"], "attempts": p["attempts"],
             "held_resource_ever": p["held_resource_ever"],
             "turn": global_turn,
         })
@@ -67,6 +67,15 @@ class PromiseLedger:
             p["opportunities"] += 1
             if victim and victim == p["target"]:
                 self._resolve(p, "broken", global_turn)
+
+    def note_trade_proposal(self, proposer: str, target: str, give: dict,
+                            global_turn: int):
+        """A genuine attempt: the promiser offered the promised resource to the
+        target inside the window. If the target declines and the window expires,
+        that is the counterparty's refusal, not the promiser's violation."""
+        for p in self._open(promiser=proposer, act="will_trade", target=target):
+            if (give or {}).get(p["resource"], 0) > 0:
+                p["attempts"] += 1
 
     def note_trade_exec(self, a: str, b: str, a_gave: dict, b_gave: dict,
                         global_turn: int):
@@ -95,8 +104,11 @@ class PromiseLedger:
                 if p["act"] == "no_rob":
                     self._resolve(p, "kept", global_turn)
                 else:  # will_trade expired unfulfilled
-                    self._resolve(p, "excused" if not p["held_resource_ever"]
-                                  else "broken", global_turn)
+                    if p["attempts"] > 0:
+                        self._resolve(p, "declined", global_turn)
+                    else:
+                        self._resolve(p, "excused" if not p["held_resource_ever"]
+                                      else "broken", global_turn)
 
     def close(self, global_turn: int):
         for p in list(self._open()):

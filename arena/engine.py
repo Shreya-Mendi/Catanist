@@ -37,17 +37,19 @@ _DEV_DECK = (["knight"] * 14 + ["vp"] * 5 + ["monopoly"] * 2
 class Game:
     def __init__(self, players: list[PlayerAgent], seed: int = 0,
                  speech_mode: str = "free", max_turns: int | None = None,
-                 progress_cb=None):
+                 progress_cb=None, live_path=None, board_profile: str = "standard"):
         self.players = players
         self.n = len(players)
         self.speech_mode = speech_mode
         self.max_turns = max_turns or MAX_TURNS
         self.progress_cb = progress_cb
+        self.live_path = live_path          # partial log flushed here each turn
         self.ledger = PromiseLedger()
         self.talk = deque(maxlen=8)     # recent public lines: (turn, name, line)
         self.notes = deque(maxlen=6)    # recent robber/trade notes for the digest
         self.rng = random.Random(seed)
-        self.board = B.make_board(seed)
+        self.board = B.make_board(seed, profile=board_profile)
+        self.board["profile"] = board_profile
         self.robber = self.board["robber"]
         self.events: list[dict] = []
         self.turn = 0
@@ -465,6 +467,8 @@ class Game:
             out["raw"] = (dec.raw or "")[:500]
         if getattr(dec, "fallback", False):
             out["played_by"] = "heuristic"
+        if getattr(dec, "prompt", ""):
+            out["prompt"] = dec.prompt
         if not getattr(dec, "_ingested", False):
             dec._ingested = True
             if dec.speech and dec.speech.get("type") == "promise" and actor_name:
@@ -635,6 +639,7 @@ class Game:
         self._log(type="trade_proposal", proposer=p.name, target=target,
                   give=give, want=want,
                   rewritten=sorted(set(rewrote)) or None, **self._dfields(dec))
+        self.ledger.note_trade_proposal(p.name, target, give, self.turn)
         # target can only accept what it holds
         tgt = self.players[ti]
         if any(tgt.res.get(r, 0) < n for r, n in want.items()):
@@ -644,7 +649,8 @@ class Game:
         ropts = {"have": dict(tgt.res), "give": want, "want": give,
                  "partner": p.name, "player_names": self._names()}
         rprompt = (f"{p.name} offers you a trade: they GIVE {give} and WANT {want} "
-                   f"from you. Your resources: {dict(tgt.res)}. Accept?\n"
+                   f"from you. Your resources: {dict(tgt.res)}. Decide and set "
+                   f'"accept": true to take the deal or false to decline.\n'
                    + self._digest_block())
         rdec = tgt.decide_trade_response(rprompt, ropts)
         self._prep(rdec, target)
@@ -792,6 +798,19 @@ class Game:
             self._log(type="turn", actor=self.players[self.cur].name,
                       n=self.turn, seat=self.cur)
             winner = self._take_turn(self.cur)
+            if self.live_path:
+                try:                        # atomic partial dump for live viewing
+                    import json as _j
+                    from pathlib import Path as _P
+                    tmp = _P(str(self.live_path) + ".tmp")
+                    tmp.write_text(_j.dumps({
+                        "partial": True, "turn": self.turn,
+                        "winner": None, "reason": "in progress",
+                        "vps": {p.name: self.vp(i) for i, p in enumerate(self.players)},
+                        "events": self.events}))
+                    tmp.replace(self.live_path)
+                except Exception:
+                    pass
             if self.progress_cb:
                 try:
                     self.progress_cb(self.turn, {p.name: self.vp(i)

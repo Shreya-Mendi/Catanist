@@ -114,7 +114,8 @@ def run_one(cfg: dict, provider_get=None, progress_cb=None) -> dict:
     game = Game(players, seed=cfg.get("seed", 0),
                 speech_mode=cfg.get("speech_mode", "free"),
                 max_turns=cfg.get("max_turns"),
-                progress_cb=progress_cb)
+                progress_cb=progress_cb, live_path=cfg.get("_live_path"),
+                board_profile=cfg.get("board_profile", "standard"))
     result = game.run()
     result["config_name"] = cfg.get("name", "game")
     result["scene"] = cfg.get("scene", "harbor")   # viz theme
