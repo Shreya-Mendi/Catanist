@@ -472,8 +472,14 @@ async function renderLabelTab(){
       ${field("Run",null,`<select id="l-run">
         ${runs.map(r=>`<option value="${r.id}">#${r.id} ${r.ename} · ${pretty(r.condition)} · seed ${r.seed}</option>`).join("")}</select>`,
         "free-speech runs are the E1 validation set")}
-      <button class="ghost" onclick="loadLabels()">start labeling</button></div>
+      <button class="ghost" onclick="loadLabels()">start labeling</button>
+      <a class="ghost" id="l-replay" target="_blank" data-info="The illustrated replay of this run — watch the whole game to see how it progressed.">watch the game</a>
+      <a class="ghost" id="l-transcript" target="_blank" data-info="The full research transcript: every decision, reasoning, and adjudication.">read the transcript</a></div>
     <div id="l-out" style="margin-top:16px"></div></div>`;
+  const syncLinks=()=>{ const r=runs.find(x=>String(x.id)===$("#l-run").value); if(!r) return;
+    $("#l-replay").href="/"+(r.log_path||"").replace(".json","_scene.html");
+    $("#l-transcript").href=`/run/${r.id}/transcript`; };
+  $("#l-run").addEventListener("change", syncLinks); syncLinks();
 }
 let queue=[],qi=0;
 async function loadLabels(){
@@ -487,7 +493,8 @@ function drawLabel(){
      <span class="small" data-info="Cards in hand — hidden from other players, shown to you because you are the referee here.">· ${it.hands?.[n]??"?"} cards</span></span>`).join("");
   const recent=(it.recent||[]).map(r=>r.say
     ?`<div class="t-say" style="margin:3px 0"><b>${r.who}</b>: “${esc(r.say)}”</div>`
-    :`<div class="t-dim">${r.who} ${esc(r.ev)}</div>`).join("")||"<span class='small'>quiet table</span>";
+    :`<div class="t-dim">${r.who} ${esc(r.ev)}</div>`).join("")
+    ||(it.turn===0?"<span class='small'>setup phase — players are placing their first settlements; no table talk yet. Later statements carry the recent activity.</span>":"<span class='small'>quiet table — nothing was said in the last few events</span>");
   out.innerHTML=`
   <div class="grid2">
     <div class="boardbox"><label>What the table sees — turn ${it.turn}</label>
