@@ -18,6 +18,11 @@ from . import speech as SP
 
 RES = ("wood", "brick", "sheep", "wheat", "ore")
 
+MEMORY_WINDOW = 8          # verbatim exchanges kept in the conversational window (ops constant)
+NOTES_WINDOW = 6           # private-continuity entries shown each turn
+_BEHAVIORAL_KEYS = ("action", "vertex", "edge", "hex", "target_player", "give", "want",
+                    "resource", "resources", "accept", "speech", "public_statement")
+
 
 @dataclass
 class Decision:
@@ -47,6 +52,12 @@ class PlayerAgent:
     intent_text: str = ""      # custom intent block; overrides the preset when set
     instruction: str = ""      # honesty instruction (E4 steerability knob); "" = none
     framing: str = ""          # table framing, e.g. one-team shared goal; "" = free-for-all
+    # --- memory (three layers; public memory is the engine digest) -------------
+    memory: str = "chat"       # chat (default) | stateless (legacy reproduction only)
+    memory_scope: str = "full" # full: reasoning+plans persist | behavioral: actions+speech only
+    history: list = field(default_factory=list)   # conversational window (role/content)
+    notes: list = field(default_factory=list)     # private continuity: (turn, intent, plan)
+    current_turn: int = 0
     costume: str = ""       # viz-only: e.g. "wizard", "knight"
     color: str = ""         # viz-only: hex accent
     rng: random.Random = field(default_factory=random.Random)
@@ -119,13 +130,45 @@ class PlayerAgent:
             ]
         return "\n\n".join(parts)
 
+    # --- memory layers -------------------------------------------------------
+    def _notes_block(self) -> str:
+        if self.memory != "chat" or self.memory_scope != "full" or not self.notes:
+            return ""
+        lines = ["MY PRIVATE NOTES (only you see these — your own recent intents and plans):"]
+        for turn, intent, plan in self.notes[-NOTES_WINDOW:]:
+            steps = " -> ".join(plan) if plan else "(no plan)"
+            lines.append(f"- T{turn}: {intent or '(no intent)'} | plan: {steps}")
+        return "\n".join(lines)
+
+    def _messages(self, prompt_sent: str) -> list:
+        window = self.history[-2 * MEMORY_WINDOW:] if self.memory == "chat" else []
+        return list(window) + [{"role": "user", "content": prompt_sent}]
+
+    def _remember(self, prompt_sent: str, raw: str, data: dict, dec) -> None:
+        if self.memory != "chat":
+            return
+        if self.memory_scope == "full":
+            kept = raw
+            self.notes.append((self.current_turn, dec.intent,
+                               [st["step"] for st in (dec.plan or [])]))
+        else:                                        # behavioral: what it did and said
+            import json as _j
+            kept = _j.dumps({k: data[k] for k in _BEHAVIORAL_KEYS if k in data})
+        self.history += [{"role": "user", "content": prompt_sent},
+                         {"role": "assistant", "content": kept}]
+        del self.history[:-2 * MEMORY_WINDOW]
+
     def _decide(self, prompt: str, options: dict) -> Decision:
+        notes = self._notes_block()
+        prompt_sent = (notes + "\n\n" + prompt) if notes else prompt
         try:
-            raw = self.provider.complete(self._system(), prompt, self.model, options)
+            raw = self.provider.complete_messages(
+                self._system(), self._messages(prompt_sent), self.model, options)
         except Exception as e:                       # network / rate-limit / API error
             return Decision(f"<provider error: {type(e).__name__}>", "...",
                             {"action": "end_turn"}, parse_ok=False, raw=str(e),
-                            prompt=prompt)
+                            prompt=prompt_sent)
+        prompt = prompt_sent
         data = parse_decision(raw)
         if data is None:
             # one corrective retry — small models wrap the JSON in prose or
@@ -134,7 +177,8 @@ class PlayerAgent:
                    "parseable JSON object. Reply with ONLY the JSON object — "
                    "no prose before or after it.")
             try:
-                raw = self.provider.complete(self._system(), fix, self.model, options)
+                raw = self.provider.complete_messages(
+                    self._system(), self._messages(fix), self.model, options)
                 data = parse_decision(raw)
             except Exception:
                 data = None
@@ -155,6 +199,7 @@ class PlayerAgent:
         dec.prompt = prompt
         dec.plan, _ = SP.validate_plan(data.get("plan"))
         if self.speech_mode != "typed":
+            self._remember(prompt, dec.raw, dec.data, dec)
             return dec
         names = options.get("player_names") or []
         norm, errs = SP.validate_speech(data.get("speech"), self.name, names)
@@ -164,7 +209,8 @@ class PlayerAgent:
                    f"invalid ({'; '.join(errs)}). Reply again with the SAME JSON "
                    "shape; use speech type \"none\" if you have nothing to say.")
             try:
-                raw2 = self.provider.complete(self._system(), fix, self.model, options)
+                raw2 = self.provider.complete_messages(
+                    self._system(), self._messages(fix), self.model, options)
                 data2 = parse_decision(raw2)
             except Exception:
                 data2 = None
@@ -181,6 +227,7 @@ class PlayerAgent:
         else:
             dec.speech = norm
         dec.public = SP.render(dec.speech, self.name)
+        self._remember(prompt, dec.raw, dec.data, dec)
         return dec
 
     # the engine calls these; it re-validates everything it applies

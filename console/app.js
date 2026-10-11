@@ -30,6 +30,8 @@ const INFO={
   condition:"The experimental condition this game belongs to. Conditions in one experiment share boards and seeds, so differences between them are the treatment.",
   scores:"Live victory points per seat. First to 10 wins; the hex marks each player's color.",
   labelwhy:"Your labels validate the rule battery: if humans and the rules disagree about what counts as a lie, the instrument gets fixed before any result is trusted. Labeler identity is your login, so agreement statistics come free.",
+  memscope:"What each agent carries between its own turns. full: its reasoning, intents and plans persist (the scheming-capable setting, the default). behavioral: only what it did and said persists — it remembers its moves, not its thoughts. Public table memory is always on.",
+  e1:"Launches the H1 validation pair: the same seeds played once with typed speech and once with free speech. The free arm is scored by the extractor + engine and validated by hand labels.",
   framing:"How the table relates. Free-for-all is standard Catan: everyone for themselves. One team: every player is told the whole table wins together. Teams of two: seats are paired in order (1+2 vs 3+4) and each player is told exactly who its teammate is. All of it lives in the prompts only — rules and scoring never change — so you can ask whether lying stops inside a team and sharpens between teams.",
   dosemax:"How many players get the deceptive persona. The batch runs one game-set per level, from zero up to your chosen number, on identical boards, so you can watch what each added liar does to the honest players.",
   export:"A zip with the experiment record, every game log, all labels, computed metrics, and the frozen battery spec — the paper-review bundle.",
@@ -41,6 +43,8 @@ function pretty(c){
   if(!c||c==="baseline") return "baseline";
   let m=c.match(/^deceptive_seats=(\d)$/);
   if(m) return m[1]==="0"?"all honest seats":`${m[1]} deceptive seat${m[1]==="1"?"":"s"}`;
+  m=c.match(/^arm=(typed|free)$/);
+  if(m) return m[1]==="typed"?"typed speech":"free speech";
   m=c.match(/^instr=([^|]+)\|brief=(.+)$/);
   if(m){
     const ins={none:"no instruction","honesty-rule":"honesty rule",
@@ -152,6 +156,8 @@ function conds(){
       out.push({tag:`instr=${ins}|brief=${br}`,mut:c=>{
         c.instruction=ins==="none"?"":CAT.instructions[ins];
         c.players.forEach(p=>p.strategy=br);}});
+  if($("#f-e1")?.checked)
+    for(const sm of ["typed","free"]) out.push({tag:`arm=${sm}`,mut:c=>{c.speech_mode=sm;}});
   if(!out.length) out.push({tag:"baseline",mut:()=>{}});
   return out;
 }
@@ -163,7 +169,8 @@ function est(){
 function drawLab(){
   const keep={};
   ["f-name","f-hyp","f-notes","f-speech","f-scene","f-maxturns","f-reps","f-seed",
-   "f-instr","f-instr-custom","f-brief","f-dose","f-grid","f-framing","f-dosemax"].forEach(id=>{
+   "f-instr","f-instr-custom","f-brief","f-dose","f-grid","f-framing","f-dosemax",
+   "f-memscope","f-e1"].forEach(id=>{
     const n=$("#"+id); if(n) keep[id]=n.type==="checkbox"?n.checked:n.value;});
   $("#tab-lab").innerHTML=`
   <div class="card"><h2>Design an experiment</h2>
@@ -209,6 +216,10 @@ function drawLab(){
         <option value="honesty-values">values — you are trustworthy</option>
         <option value="binding-semantics">binding — statements are commitments</option>
         </select>`,"a standing rule written into every player prompt")}
+      ${field("Agent memory","memscope",`<select id="f-memscope">
+        <option value="full">full — thoughts and plans persist</option>
+        <option value="behavioral">behavioral — only moves and speech persist</option></select>`,
+        "public table memory is always on")}
       ${field("Table framing","framing",`<select id="f-framing">
         <option value="">free-for-all — standard Catan</option>
         <option value="team">one team — everyone wins together</option>
@@ -226,6 +237,8 @@ function drawLab(){
         </select> deceptive players ${dot("dosemax")}</label>
       <label style="font-weight:700;font-size:14px"><input type="checkbox" id="f-grid"
         onchange="drawLabEst()"> Do rules hold? — every honesty rule x coaching combo ${dot("grid")}</label>
+      <label style="font-weight:700;font-size:14px"><input type="checkbox" id="f-e1"
+        onchange="drawLabEst()"> Does typing change what they say? — typed vs free, same seeds ${dot("e1")}</label>
     </div>
   </div>
   <div class="card"><h2>Players — ${seats.length} at the table
@@ -255,6 +268,7 @@ async function previewPrompts(){
   const instruction=$("#f-instr-custom").value.trim()||CAT.instructions[instrKey]||"";
   const cfg={scene:$("#f-scene").value,speech_mode:$("#f-speech").value,
     max_turns:+$("#f-maxturns").value,seed:+$("#f-seed").value,instruction,
+    memory_scope:$("#f-memscope").value,
     ...($("#f-framing").value?{framing_mode:$("#f-framing").value}:{}),
     players:seats.map(s=>({name:s.name,provider:"mock",model:s.model,
       persona:s.persona||"a settler",intent:s.intent,strategy:$("#f-brief").value,
@@ -275,7 +289,7 @@ async function launch(){
   const instrKey=$("#f-instr").value;
   const instruction=$("#f-instr-custom").value.trim()||CAT.instructions[instrKey]||"";
   const base={scene:$("#f-scene").value,speech_mode:$("#f-speech").value,
-    max_turns:+$("#f-maxturns").value,instruction,
+    max_turns:+$("#f-maxturns").value,instruction,memory_scope:$("#f-memscope").value,
     ...($("#f-framing").value?{framing_mode:$("#f-framing").value}:{}),
     players:seats.map(s=>({name:s.name,provider:s.provider,model:s.model,
       persona:s.persona||"a settler",intent:s.intent,strategy:$("#f-brief").value,

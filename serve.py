@@ -622,7 +622,10 @@ class Handler(BaseHTTPRequestHandler):
                     (rid, user))}
                 items = []
                 evs = log["events"]
+                running_vps = {}                       # fallback for pre-stamp logs
                 for i, e in enumerate(evs):
+                    if e.get("type") == "vp" and e.get("totals"):
+                        running_vps = dict(e["totals"])
                     pub = e.get("public")
                     if not pub or i in have or "parse_ok" not in e:
                         continue
@@ -643,7 +646,7 @@ class Handler(BaseHTTPRequestHandler):
                                   "who": e.get("actor") or e.get("proposer")
                                   or e.get("responder"),
                                   "turn": e.get("turn"),
-                                  "vps": stamp.get("vps", {}),
+                                  "vps": stamp.get("vps") or running_vps,
                                   "hands": stamp.get("hands", {}),
                                   "recent": recent[-7:]})
                     if len(items) >= 25:

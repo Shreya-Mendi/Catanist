@@ -110,3 +110,16 @@ payload. Before this, a majority of quiet-turn decisions (8/10 in the mock
 check) silently discarded their speech: statement and informativeness counts
 in earlier typed runs are undercounts, and a promise attached to an end-turn
 breath never registered. Adjudications of logged statements were unaffected.
+
+## Addendum 2026-10-10 (memory epoch)
+Agents now carry memory by default (`memory: chat`): three layers — the engine
+digest (public, full fidelity, unchanged), a private-continuity block of the
+agent's own recent intents and plans (last 6), and a verbatim conversational
+window of the last K=8 exchanges. `memory_scope: full` (default) persists
+reasoning and plans; `behavioral` persists only moves and speech. Literature
+basis: raw transcripts saturate context and degrade play (2506.04651), rolling
+summaries drift (2603.07670); the Avalon reputation study (2604.20582) uses
+bounded structured reflection. Every run before this date was stateless; E1
+onward is a new comparability epoch. `memory: stateless` is retained only to
+reproduce earlier data. Battery metrics are unchanged; `memory_len` and
+`notes_len` are logged per decision.

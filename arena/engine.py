@@ -472,6 +472,10 @@ class Game:
             out["played_by"] = "heuristic"
         if getattr(dec, "prompt", ""):
             out["prompt"] = dec.prompt
+        holder = next((q for q in self.players if q.name == actor_name), None)
+        if holder is not None:
+            out["memory_len"] = len(holder.history) // 2
+            out["notes_len"] = len(holder.notes)
         if not getattr(dec, "_ingested", False):
             dec._ingested = True
             if dec.speech and dec.speech.get("type") == "promise" and actor_name:
@@ -789,7 +793,9 @@ class Game:
                   "costume": p.costume, "color": p.color,
                   "intent_text": p.intent_text or None,
                   "instruction": p.instruction or None,
-                  "framing": p.framing or None} for p in self.players]
+                  "framing": p.framing or None,
+                  "memory": p.memory, "memory_scope": p.memory_scope}
+                 for p in self.players]
         self._log(type="setup", players=setup, board=self.board)
 
         self._setup()
@@ -798,6 +804,8 @@ class Game:
         while winner is None and self.turn < self.max_turns:
             self.turn += 1
             self.cur = (self.turn - 1) % self.n
+            for pl in self.players:
+                pl.current_turn = self.turn
             self._log(type="turn", actor=self.players[self.cur].name,
                       n=self.turn, seat=self.cur)
             winner = self._take_turn(self.cur)

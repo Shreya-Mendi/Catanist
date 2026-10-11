@@ -18,6 +18,14 @@ import re
 
 
 class Provider:
+    def complete_messages(self, system, messages, model, options):
+        """Multi-turn call: `messages` is the alternating user/assistant history
+        ending with the current user prompt. Providers without history support
+        fall back to the last user message (mock, anthropic)."""
+        last_user = next((m["content"] for m in reversed(messages)
+                          if m["role"] == "user"), "")
+        return self.complete(system, last_user, model, options)
+
     name = "base"
 
     def complete(self, system: str, user: str, model: str, options: dict) -> str:
@@ -252,6 +260,9 @@ class OpenAIProvider(Provider):
     def complete(self, system, user, model, options):
         return GitHubModelsProvider.complete(self, system, user, model, options)
 
+    def complete_messages(self, system, messages, model, options):
+        return GitHubModelsProvider.complete_messages(self, system, messages, model, options)
+
 
 class GitHubModelsProvider(Provider):
     """GitHub Models — free/low-cost inference, OpenAI-compatible.
@@ -280,6 +291,10 @@ class GitHubModelsProvider(Provider):
     _last_call = 0.0
 
     def complete(self, system, user, model, options):
+        return self.complete_messages(
+            system, [{"role": "user", "content": user}], model, options)
+
+    def complete_messages(self, system, messages, model, options):
         import time
         pace = float(os.environ.get("CATAN_PACE_S", "0") or 0)
         if pace > 0:
@@ -290,8 +305,7 @@ class GitHubModelsProvider(Provider):
         for attempt in range(self.RETRIES):
             try:
                 kw = dict(max_tokens=1100, temperature=0.8)
-                msgs = [{"role": "system", "content": system},
-                        {"role": "user", "content": user}]
+                msgs = [{"role": "system", "content": system}] + list(messages)
                 try:
                     resp = self.client.chat.completions.create(
                         model=model, messages=msgs, **kw)
@@ -395,6 +409,10 @@ class TinkerProvider(Provider):
         return self._samplers[model], self._tokenizers[model]
 
     def complete(self, system, user, model, options):
+        return self.complete_messages(
+            system, [{"role": "user", "content": user}], model, options)
+
+    def complete_messages(self, system, messages, model, options):
         import re as _re
         import time
         from tinker import types
@@ -402,8 +420,7 @@ class TinkerProvider(Provider):
         for attempt in range(self.RETRIES):
             try:
                 sc, tok = self._sampler(model)
-                msgs = [{"role": "system", "content": system},
-                        {"role": "user", "content": user}]
+                msgs = [{"role": "system", "content": system}] + list(messages)
                 try:
                     ids = tok.apply_chat_template(msgs, add_generation_prompt=True,
                                                   enable_thinking=False)

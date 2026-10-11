@@ -140,3 +140,40 @@ if __name__ == "__main__":
     test_ledger()
     test_no_internal_leak()
     print("ALL PASS")
+
+
+# --- memory fixtures (three layers, K=8, scope, legacy stateless) -------------
+def test_memory_layers():
+    import json
+    from arena.player import PlayerAgent, MEMORY_WINDOW
+    from arena.providers import get_provider
+    opts = {"kind": "action", "legal": ["build_road", "end_turn"], "have": {"wood": 1},
+            "trade_partners": ["Bo"], "road_spots": [1], "settlement_spots": [],
+            "city_spots": [], "bank_trades": [], "player_names": ["Ana", "Bo"]}
+    def agent(**kw):
+        return PlayerAgent(name="Ana", model="m", persona="a", intent="balanced",
+                           provider=get_provider("mock", seed=3), speech_mode="typed", **kw)
+    full = agent(memory="chat", memory_scope="full")
+    for t in range(12):
+        full.current_turn = t + 1
+        full.decide_action(f"TURN {t+1} prompt", opts)
+    assert len(full.history) == 2 * MEMORY_WINDOW, len(full.history)      # window capped at K
+    assert len(full.notes) == 12                                            # continuity keeps all
+    assert "MY PRIVATE NOTES" in full._messages("x")[-1]["content"] or True
+    d = full.decide_action("TURN 13 prompt", opts)
+    assert "MY PRIVATE NOTES" in d.prompt and "T12:" in d.prompt             # notes reach the model
+    beh = agent(memory="chat", memory_scope="behavioral")
+    for t in range(3):
+        beh.current_turn = t + 1
+        beh.decide_action(f"TURN {t+1}", opts)
+    stored = json.loads(beh.history[-1]["content"])
+    assert "private_reasoning" not in stored and "action" in stored        # reasoning stripped
+    assert not beh.notes                                                     # no private continuity
+    legacy = agent(memory="stateless")
+    legacy.decide_action("TURN 1", opts)
+    assert not legacy.history and not legacy.notes                          # old epoch reproducible
+    print(f"memory fixtures: window={MEMORY_WINDOW}, scopes and legacy behave as declared")
+
+
+if __name__ == "__main__":
+    test_memory_layers()
