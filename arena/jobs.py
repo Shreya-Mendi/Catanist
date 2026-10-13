@@ -61,7 +61,23 @@ def _work(worker_id: int):
             except Exception as e:
                 print(f"[jobs] scene render failed for {path.name}: "
                       f"{type(e).__name__}: {e}", flush=True)
-            metrics = json.dumps(game_metrics(result))
+            mdict = game_metrics(result)
+            # free arm: the typed battery reads nothing, so score the free text
+            # with the extractor (LLM proposes acts, engine adjudicates) and keep
+            # the per-seat result under "extracted" (CONSOLE_EXTRACT=0 disables)
+            if cfg.get("speech_mode") == "free" and \
+                    os.environ.get("CONSOLE_EXTRACT", "1") != "0":
+                try:
+                    from .extractor import attach_extraction
+                    out = attach_extraction(result, path, _providers("openai"))
+                    mdict["extracted"] = out["per_seat"]
+                    mdict["extracted_model"] = out["model"]
+                    mdict["extracted_version"] = out["version"]
+                except Exception as e:
+                    print(f"[jobs] extraction failed for {path.name}: "
+                          f"{type(e).__name__}: {e}", flush=True)
+                    mdict["extraction_error"] = f"{type(e).__name__}: {e}"[:300]
+            metrics = json.dumps(mdict)
             with con:
                 con.execute("UPDATE runs SET status='done', finished=?, "
                             "log_path=?, metrics=? WHERE id=?",

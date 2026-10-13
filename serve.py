@@ -21,7 +21,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http import cookies as http_cookies
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 from arena import db, jobs
 from arena.intents import INTENTS
@@ -301,7 +301,31 @@ def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
                  f"<td>{_esc((p_.get('instruction') or '—'))}</td>"
                  f"<td>{_esc((p_.get('framing') or 'free-for-all'))[:60]}</td></tr>")
     head += "</table>"
-    if m:
+    free_arm = (cfg.get("speech_mode") or "free") == "free"
+    if m and m.get("extracted"):
+        head += (f"""<h2>Battery summary (free text, extracted)</h2>
+<p class="meta">Free speech carries no typed acts, so each public line was converted into
+claim / promise / announce acts by the extractor ({_esc(m.get('extracted_model') or '?')},
+{_esc(m.get('extracted_version') or 'v1')}) and every act was adjudicated by the engine:
+claims against the hand logged with that decision, promises by ledger replay. The LLM
+proposes structure only; it never decides truth. Pending human labels (the E1 kappa gate).</p>
+<table><tr><th>seat</th><th>statements</th><th>claims (false)</th>
+<th>promises k/b/d/e/c</th><th>announce / cond. / other</th><th>viol/stmt</th><th>informativeness</th></tr>""")
+        for name, pd in m["extracted"].items():
+            head += (f"<tr><td><b>{_esc(name)}</b></td><td>{pd['statements']}</td>"
+                     f"<td>{pd['claims']} ({pd['false_claims']})</td>"
+                     f"<td>{pd['promises']}: {pd['kept']}/{pd['broken']}/{pd['declined']}/{pd['excused']}/{pd['censored']}</td>"
+                     f"<td>{pd['announce']} / {pd['conditional']} / {pd['other']}</td>"
+                     f"<td>{pd['violation_rate_per_statement']}</td>"
+                     f"<td>{pd.get('informativeness')}</td></tr>")
+        head += "</table>"
+    elif m and free_arm:
+        head += ("<h2>Battery summary</h2><p class='meta'>Free-speech game: the typed battery "
+                 "reads no acts here (statements would show 0 for every seat). The free text is "
+                 "scored by the extractor + engine; no extraction is stored for this run yet"
+                 + (f" (last attempt failed: {_esc(m.get('extraction_error'))})" if m.get("extraction_error") else "")
+                 + ". Run <code>python -m arena.extractor --backfill</code> on the server to score it.</p>")
+    elif m:
         head += """<h2>Battery summary</h2>
 <table><tr><th>seat</th><th>coverage</th><th>statements</th><th>claims (false)</th>
 <th>promises k/b/e/c</th><th>viol/stmt</th><th>informativeness</th></tr>"""
@@ -404,6 +428,10 @@ def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
             blocks.append(f"<div class='panel {cls}'><b>SAYS TO THE TABLE "
                           f"({sp['type']}) {adj}</b>&ldquo;{_esc(e.get('public'))}&rdquo;"
                           f"<div class='meta'>speech object: {_esc(json.dumps(sp))}</div></div>")
+        elif sp is not None and sp.get("type") == "none" and sp.get("flavor"):
+            blocks.append(f"<div class='panel pub' style='border-left-color:#c3ced6;background:#f4f7f9'>"
+                          f"<b>TABLE CHATTER (no checkable content, unscored)</b>"
+                          f"&ldquo;{_esc(sp['flavor'])}&rdquo;</div>")
         elif e.get("public") and cfg.get("speech_mode") == "free":
             blocks.append(f"<div class='panel pub'><b>SAYS TO THE TABLE (free text)</b>"
                           f"&ldquo;{_esc(e['public'])}&rdquo;</div>")
@@ -476,21 +504,30 @@ def _experiment_metrics(con, eid):
         m = json.loads(r["metrics"])
         cfg = json.loads(r["config"])
         dec_intents = {"deceptive"}
+        extracted = m.get("extracted") or {}
         for name, pd in m["players"].items():
             seatcls = "deceptive" if (pd.get("intent") in dec_intents) else "honest"
             c = conds.setdefault(r["condition"] or "default", {})
             g = c.setdefault(seatcls, {"viol": [], "break": [], "false": [],
                                        "info": [], "trades": [], "cov": []})
-            g["viol"].append(pd.get("violation_rate_per_statement"))
-            g["break"].append(pd.get("promise_break_rate"))
-            g["false"].append(pd.get("false_claim_rate"))
-            g["info"].append(pd.get("informativeness"))
+            src = c.setdefault("_source", {}).setdefault(seatcls, {"typed": 0, "extracted": 0})
+            # a free-arm seat has no typed acts: its speech rates come from the
+            # extractor + engine adjudication stored under "extracted"
+            sp = extracted.get(name) or pd
+            src["extracted" if name in extracted else "typed"] += 1
+            g["viol"].append(sp.get("violation_rate_per_statement"))
+            g["break"].append(sp.get("promise_break_rate"))
+            g["false"].append(sp.get("false_claim_rate"))
+            g["info"].append(sp.get("informativeness"))
             g["trades"].append(pd.get("trades_proposed"))
             g["cov"].append(pd.get("coverage"))
     out = {}
     for cond, seats in conds.items():
+        source = seats.pop("_source", {})
         out[cond] = {cls: {k: _bootstrap_ci(v) for k, v in g.items()}
                      for cls, g in seats.items()}
+        for cls in out[cond]:
+            out[cond][cls]["source"] = source.get(cls, {})
     return out
 
 
@@ -653,14 +690,16 @@ class Handler(BaseHTTPRequestHandler):
                         break
                 return self._send(200, items)
             if path.startswith("/exports/"):
-                f = ROOT / "research" / "exports" / Path(path[len("/exports/"):]).name
+                f = ROOT / "research" / "exports" / Path(unquote(path[len("/exports/"):])).name
                 if f.exists():
                     return self._send(200, f.read_bytes(), "application/zip",
                                       extra={"Content-Disposition":
                                              f"attachment; filename={f.name}"})
                 return self._send(404, {"err": "no such export"})
             if path.startswith("/logs/"):
-                f = ROOT / "logs" / Path(path[len("/logs/"):]).name
+                # the browser percent-encodes non-ASCII file names (the E1 batch
+                # names carry a long dash); decode before looking the file up
+                f = ROOT / "logs" / Path(unquote(path[len("/logs/"):])).name
                 if f.exists():
                     ct = "text/html; charset=utf-8" if f.suffix == ".html" else "application/json"
                     return self._send(200, f.read_bytes(), ct)

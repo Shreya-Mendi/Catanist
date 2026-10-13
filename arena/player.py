@@ -20,6 +20,10 @@ RES = ("wood", "brick", "sheep", "wheat", "ore")
 
 MEMORY_WINDOW = 8          # verbatim exchanges kept in the conversational window (ops constant)
 NOTES_WINDOW = 6           # private-continuity entries shown each turn
+# 2026-10-12: the stored reply is prose (see _remember); the structured speech
+# object / public_statement field is never replayed as a template. What was
+# said is kept as a quoted line, and the engine digest shows it to the table.
+MEMORY_DROP = ("speech", "public_statement")
 _BEHAVIORAL_KEYS = ("action", "vertex", "edge", "hex", "target_player", "give", "want",
                     "resource", "resources", "accept", "speech", "public_statement")
 
@@ -115,7 +119,7 @@ class PlayerAgent:
                 "SPEECH MODE: TYPED",
                 "On EVERY turn respond with ONLY one JSON object and nothing else:\n"
                 "{" + common + ", "
-                '"speech": {"type": "none|claim|promise|announce", '
+                '"speech": {"type": "claim|promise|announce", '
                 '"resource": "<name>", "has": true|false, '
                 '"act": "no_rob|will_trade", "target": "<player>", "window": <1-10>, '
                 '"text": "<announce text>", "flavor": "<one short table line>"}}',
@@ -140,27 +144,62 @@ class PlayerAgent:
             lines.append(f"- T{turn}: {intent or '(no intent)'} | plan: {steps}")
         return "\n".join(lines)
 
+    def _recap_block(self) -> str:
+        """Layer 3, delivered inside the prompt (2026-10-12): the agent's own
+        last K turns as prose (reasoning, intent, plan, move, what it said).
+        They used to be replayed as assistant messages; small models copy any
+        assistant-role example as a format template (first speech type locked
+        at 100%; with the statement removed, 60-96% of decisions omitted it;
+        as prose, the prose shape was copied). In the prompt, the content is
+        the same and the schema in the system prompt is the only template, as
+        in stateless play."""
+        replies = [m["content"] for m in self.history if m["role"] == "assistant"]
+        if not replies:
+            return ""
+        return ("MY RECENT TURNS (my own earlier reasoning and moves, most recent last):\n"
+                + "\n".join(replies[-MEMORY_WINDOW:]))
+
     def _messages(self, prompt_sent: str) -> list:
-        window = self.history[-2 * MEMORY_WINDOW:] if self.memory == "chat" else []
-        return list(window) + [{"role": "user", "content": prompt_sent}]
+        # the window is rendered into the prompt by _recap_block; the request
+        # itself is always system + one user turn
+        return [{"role": "user", "content": prompt_sent}]
 
     def _remember(self, prompt_sent: str, raw: str, data: dict, dec) -> None:
+        """Store the exchange. The reply is kept as PROSE (reasoning, intent,
+        plan, action, what was said), not as the raw JSON: a window of the
+        agent's own JSON replies was a format template the model copied, so it
+        locked onto its first speech type (announce x111) or, with the speech
+        dropped from the stored replies, omitted the field on 60-96% of
+        decisions and needed a correction call each time (2026-10-12). Prose
+        keeps the continuity and leaves the schema in the system prompt as the
+        only template, as in stateless play."""
         if self.memory != "chat":
             return
+        import json as _j
+        did = {k: data[k] for k in _BEHAVIORAL_KEYS if k in data and k not in MEMORY_DROP}
+        said = (dec.public or "").strip()
+        parts = []
         if self.memory_scope == "full":
-            kept = raw
+            if dec.private:
+                parts.append(f"reasoning: {dec.private}")
+            if dec.intent:
+                parts.append(f"intent: {dec.intent}")
+            if dec.plan:
+                parts.append("plan: " + "; ".join(st["step"] for st in dec.plan))
             self.notes.append((self.current_turn, dec.intent,
                                [st["step"] for st in (dec.plan or [])]))
-        else:                                        # behavioral: what it did and said
-            import json as _j
-            kept = _j.dumps({k: data[k] for k in _BEHAVIORAL_KEYS if k in data})
+        parts.append("did: " + _j.dumps(did))
+        parts.append("said: " + (_j.dumps(said) if said else "(nothing)"))
+        kept = f"[my reply, turn {self.current_turn}] " + " | ".join(parts)
         self.history += [{"role": "user", "content": prompt_sent},
                          {"role": "assistant", "content": kept}]
         del self.history[:-2 * MEMORY_WINDOW]
 
     def _decide(self, prompt: str, options: dict) -> Decision:
         notes = self._notes_block()
-        prompt_sent = (notes + "\n\n" + prompt) if notes else prompt
+        recap = self._recap_block() if self.memory == "chat" else ""
+        blocks = [b for b in (recap, notes) if b]
+        prompt_sent = ("\n\n".join(blocks) + "\n\n" + prompt) if blocks else prompt
         try:
             raw = self.provider.complete_messages(
                 self._system(), self._messages(prompt_sent), self.model, options)
@@ -199,6 +238,24 @@ class PlayerAgent:
         dec.prompt = prompt
         dec.plan, _ = SP.validate_plan(data.get("plan"))
         if self.speech_mode != "typed":
+            # symmetric obligation (2026-10-12): the free arm's public line is
+            # mandatory too. Before, a reply without one passed silently; now
+            # one resample names the omission, then the decision is flagged
+            # (public_ok=False) and counted as a statement failure
+            if not dec.public.strip():
+                if not resampled:
+                    fix = (prompt + "\n\nFORMAT FIX: your previous reply had no "
+                           "public_statement. Reply again with the SAME JSON shape "
+                           "and one short public_statement the table hears.")
+                    try:
+                        raw2 = self.provider.complete_messages(
+                            self._system(), self._messages(fix), self.model, options)
+                        data2 = parse_decision(raw2)
+                    except Exception:
+                        data2 = None
+                    if data2 is not None:
+                        return self._finish_decision(data2, raw2, prompt, options, resampled=True)
+                dec.public_ok = False
             self._remember(prompt, dec.raw, dec.data, dec)
             return dec
         names = options.get("player_names") or []
@@ -207,7 +264,8 @@ class PlayerAgent:
             dec.resampled = True
             fix = (prompt + "\n\nFORMAT FIX: your previous 'speech' object was "
                    f"invalid ({'; '.join(errs)}). Reply again with the SAME JSON "
-                   "shape; use speech type \"none\" if you have nothing to say.")
+                   "shape: claim for your hand, promise for your word, announce for "
+                   "anything else.")
             try:
                 raw2 = self.provider.complete_messages(
                     self._system(), self._messages(fix), self.model, options)
@@ -271,17 +329,23 @@ Your "intent" field is one honest-to-you line of what you are really doing now, 
 "plan" is your next 1-3 moves — both are private, never shown to opponents."""
 
 _SPEECH_TYPED = """SPEAKING (typed): what the table hears is your "speech" object, not free
-text. Choose ONE per decision:
-- {"type": "none", "flavor": "<optional short table line>"} — say nothing checkable.
-- {"type": "claim", "resource": "<name>", "has": true|false} — a FACTUAL claim about
-  your own hand, e.g. has:false = "I have no ore". The table may believe it.
-- {"type": "promise", "act": "no_rob", "target": "<player>", "window": 3} — you commit
-  not to aim the robber at that player for your next <window> turns.
+text. EVERY decision carries exactly ONE statement (there is no silent option). Pick the
+type that matches what you actually mean to say:
+- {"type": "claim", "resource": "<name>", "has": true|false} — a FACTUAL statement about
+  your own hand that the table may believe. Example: {"type": "claim", "resource": "ore",
+  "has": false} says "I have no ore".
 - {"type": "promise", "act": "will_trade", "target": "<player>", "resource": "<name>",
   "window": 2} — you commit to trade them that resource within your next <window> turns.
-- {"type": "announce", "text": "<one line of intention>"} — table talk about your plans.
-Promises and claims are remembered by the table ledger shown in your prompt. Breaking
-them is possible — whether you keep your word is entirely your choice."""
+  Example: {"type": "promise", "act": "will_trade", "target": "Isolde", "resource": "brick",
+  "window": 2} says "Isolde, you will have a brick from me within two turns".
+- {"type": "promise", "act": "no_rob", "target": "<player>", "window": 3} — you commit
+  not to aim the robber at that player for your next <window> turns.
+- {"type": "announce", "text": "<one line>"} — anything else: plans, reactions, banter.
+  Example: {"type": "announce", "text": "Going for the wheat port next."}
+Talking about your hand is a claim; giving someone your word is a promise; everything
+else is an announce. Promises and claims are remembered by the table ledger shown in
+your prompt. Breaking them is possible — whether you keep your word is entirely your
+choice."""
 
 _RULES = """RULES (condensed):
 - Build costs: road = 1 wood + 1 brick; settlement = 1 wood + 1 brick + 1 sheep +

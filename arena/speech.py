@@ -69,14 +69,21 @@ def validate_plan(raw) -> tuple[list[dict], int]:
     return steps, untyped
 
 
-def validate_speech(raw, self_name, player_names) -> tuple[dict | None, list[str]]:
+def validate_speech(raw, self_name, player_names, allow_none=False) -> tuple[dict | None, list[str]]:
     """Normalise a typed speech object. Returns (speech, errors).
 
     errors non-empty => the caller should resample once, then flag the decision
-    (speech_ok=False) and treat it as silence. A well-formed "none" is valid."""
+    (speech_ok=False) and treat it as silence. Since 2026-10-10b (symmetric
+    speech obligation) "none" is NOT a valid statement: every decision carries
+    a claim, a promise, or an announce — the typed counterpart of free mode's
+    mandatory public line. allow_none=True keeps the legacy behaviour for
+    reproducing earlier data."""
     errs: list[str] = []
     if raw is None:
-        return {"type": "none", "flavor": ""}, errs
+        if allow_none:
+            return {"type": "none", "flavor": ""}, errs
+        return None, ["no speech object: every decision must carry a statement "
+                      "(claim, promise, or at minimum an announce)"]
     if not isinstance(raw, dict):
         return None, ["speech is not an object"]
 
@@ -84,7 +91,10 @@ def validate_speech(raw, self_name, player_names) -> tuple[dict | None, list[str
     flavor = _clip(raw.get("flavor"), FLAVOR_MAX_CHARS)
 
     if t in ("none", ""):
-        return {"type": "none", "flavor": flavor}, errs
+        if allow_none:
+            return {"type": "none", "flavor": flavor}, errs
+        return None, ["silence is not a statement: use announce for table talk, "
+                      "claim or promise when you have one"]
 
     if t == "claim":
         res = str(raw.get("resource", "")).strip().lower()

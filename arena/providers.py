@@ -135,8 +135,9 @@ class MockProvider(Provider):
         deceptive = "deceptive" in intent_tag.lower()
         roll = self.rng.random()
         if roll < 0.35 or not partners:
-            sp = {"type": "none", "flavor": self.rng.choice(
-                ["Nice roll.", "Slow turn.", "Building quietly."])}
+            sp = {"type": "announce", "text": self.rng.choice(
+                ["Nice roll, building quietly.", "Slow turn for me.",
+                 "Watching the ports this round."])}
         elif roll < 0.55 and have:
             res = self.rng.choice(sorted(have))
             lie = deceptive and self.rng.random() < 0.6

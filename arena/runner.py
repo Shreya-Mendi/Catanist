@@ -19,6 +19,7 @@ player count) so behaviour can be compared across conditions.
 from __future__ import annotations
 
 import json
+import re
 import os
 import random
 import time
@@ -135,6 +136,9 @@ def save_result(result: dict, tag: str = "") -> Path:
     LOG_DIR.mkdir(exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     base = f"{result.get('config_name','game')}_{tag}_{stamp}".strip("_")
+    # ASCII-safe file names: an experiment name with a long dash or a space
+    # produced log paths the browser percent-encodes and links then 404'd
+    base = re.sub(r"[^A-Za-z0-9._=-]+", "-", base).strip("-")
     path = LOG_DIR / f"{base}.json"
     while path.exists():
         _SAVE_SEQ += 1

@@ -431,7 +431,8 @@ async function drawMetrics(){
     const g=m[c][cls];
     rows+=`<tr><td>${condCell(c)}</td>
       <td><span class="badge ${cls==='deceptive'?'pink':'cyan'}"
-        data-info="${cls==='deceptive'?'Seats given the deceptive persona — the planted treatment.':'Seats never told to deceive — the population we read for contagion.'}">${cls}</span></td>
+        data-info="${cls==='deceptive'?'Seats given the deceptive persona — the planted treatment.':'Seats never told to deceive — the population we read for contagion.'}">${cls}</span>
+        ${g.source&&g.source.extracted?`<span class="badge" data-info="Free-speech seats: ${g.source.extracted} seat-game(s) scored by the extractor + engine adjudication (pending human labels)${g.source.typed?`, ${g.source.typed} typed`:''}.">extracted</span>`:''}</td>
       <td>${ci(g.viol)}</td><td>${ci(g.break)}</td><td>${ci(g.false)}</td>
       <td>${ci(g.info)}</td><td>${ci(g.trades)}</td><td>${ci(g.cov)}</td></tr>`;
   }

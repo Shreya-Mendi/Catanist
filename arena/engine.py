@@ -46,7 +46,10 @@ class Game:
         self.live_path = live_path          # partial log flushed here each turn
         self.ledger = PromiseLedger()
         self.talk = deque(maxlen=8)     # recent public lines: (turn, name, line)
-        self.notes = deque(maxlen=6)    # recent robber/trade notes for the digest
+        self.notes = deque(maxlen=10)   # recent robber/trade/decline notes for the digest
+        # (2026-10-11: declines are events too — a proposer that never hears
+        # a refusal re-offers the same trade blind; maxlen raised 6->10 so
+        # declines do not crowd out robberies and executed trades)
         self.rng = random.Random(seed)
         self.board = B.make_board(seed, profile=board_profile)
         self.board["profile"] = board_profile
@@ -467,6 +470,8 @@ class Game:
                 out["claim_true"] = dec._claim_true
         if getattr(dec, "resampled", False):
             out["resampled"] = True
+        if getattr(dec, "public_ok", True) is False:   # free arm: no public line after a resample
+            out["public_ok"] = False
         out["raw"] = (dec.raw or "")[:8000]   # byte-exact model reply, always
         if getattr(dec, "fallback", False):
             out["played_by"] = "heuristic"
@@ -484,6 +489,18 @@ class Game:
             if dec.public and actor_name:
                 self.talk.append((self.turn, actor_name, dec.public))
         return out
+
+    @staticmethod
+    def _bundle_str(b):
+        return " + ".join(f"{n} {r}" for r, n in (b or {}).items()) or "nothing"
+
+    def _note_decline(self, responder, proposer, give, want):
+        """A declined offer enters Recent events so the proposer (and the
+        table) learn the outcome before the next decision. Before 2026-10-11
+        refusals were logged but never broadcast, so proposers re-offered the
+        same trade up to three times a turn believing it was still pending."""
+        self.notes.append(f"T{self.turn}: {responder} declined {proposer}'s offer of "
+                          f"{self._bundle_str(give)} for {self._bundle_str(want)}")
 
     def _digest_block(self):
         """TABLE MEMORY — the engine-maintained context every seat sees
@@ -590,8 +607,10 @@ class Game:
         elif action == "buy_dev":
             self._pay(pi, "dev")
             card = self.deck.pop()
-            self._log(type="dev_buy", actor=p.name, private=dec.private,
-                      public=dec.public, parse_ok=dec.parse_ok)
+            # 2026-10-11: through _dfields like every other decision — before,
+            # a dev-card purchase bypassed the instrument (no speech, stamp,
+            # prompt or ledger ingest), a silent coverage hole
+            self._log(type="dev_buy", actor=p.name, **self._dfields(dec))
             if card == "vp":
                 p.vp_cards += 1
                 self._emit_vp()
@@ -652,6 +671,9 @@ class Game:
         if any(tgt.res.get(r, 0) < n for r, n in want.items()):
             self._log(type="trade_response", responder=target, accept=False,
                       private="(cannot cover the request)", public="I can't cover that.")
+            # the refusal is a table event (reason withheld: a decline reveals
+            # nothing about the hand, as at a real table)
+            self._note_decline(target, p.name, give, want)
             return
         ropts = {"have": dict(tgt.res), "give": want, "want": give,
                  "partner": p.name, "player_names": self._names()}
@@ -664,6 +686,8 @@ class Game:
         accept = bool(rdec.data.get("accept"))
         self._log(type="trade_response", responder=target, accept=accept,
                   **self._dfields(rdec))
+        if not accept:
+            self._note_decline(target, p.name, give, want)
         if accept:
             for r, n in give.items():
                 p.res[r] -= n

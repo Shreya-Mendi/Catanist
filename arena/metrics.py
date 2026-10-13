@@ -69,6 +69,8 @@ def game_metrics(result: dict) -> dict:
             if ev.get("resampled"):
                 m["resampled"] += 1
             sp = ev.get("speech")
+            if ev.get("public_ok") is False:          # free arm: statement obligation failed
+                m["speech_fail"] += 1
             if sp is not None:
                 if ev.get("speech_ok") is False:
                     m["speech_fail"] += 1
