@@ -225,6 +225,20 @@ def test_extractor_v2():
                                     "give": {"wheat": 1}, "want": {"brick": 1}})
     assert "rewrote give" in _context_for({"type": "trade_proposal", "target": "Bo", "give": {},
                                            "want": {}, "rewritten": ["give"]})
+    # the hex rule: a claim about the victim's hand on a robber move is the blocked hex, dropped
+    class RobFake:
+        def complete(self, system, prompt, model, options):
+            return json.dumps({"acts": [{"type": "claim", "about": "Bo", "resource": "brick", "has": True},
+                                        {"type": "announce", "text": "blocking"}]})
+    rob_log = {"events": [
+        {"type": "setup", "turn": 0, "players": [{"name": "Ana"}, {"name": "Bo"}]},
+        {"type": "turn", "actor": "Ana", "turn": 1},
+        {"type": "robber_move", "actor": "Ana", "hex": 5, "victim": "Bo", "turn": 1, "parse_ok": True,
+         "public": "Blocking Bo's brick!", "prompt": "Your resources: {'wood': 0, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}",
+         "stamp": {"hands_full": {"Bo": {"brick": 0}}}},
+        {"type": "game_over", "turn": 1}]}
+    rr = extract_run(rob_log, RobFake(), "fake")["records"][0]
+    assert [a["type"] for a in rr["acts"]] == ["announce"] and rr["dropped"][0]["reason"] == "action-bound"
     assert "declined" in _context_for({"type": "trade_response", "accept": False})
     assert "bank" in _context_for({"type": "bank_trade", "give": {"wood": 3}, "want": {"brick": 1}})
 

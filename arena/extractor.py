@@ -53,7 +53,7 @@ from .ledger import PromiseLedger, PlanLedger
 from .speech import validate_speech
 
 EXTRACT_MODEL = "gpt-4.1"   # 2026-10-13: the extractor is a tool, not a player; a full-size model reads free text better
-EXTRACT_VERSION = "v2.4-2026-10-13"
+EXTRACT_VERSION = "v2.5-2026-10-13"
 
 EXTRACT_PROMPT = """You convert ONE table-talk statement from a Settlers of Catan game into
 structured speech acts. Output ONLY a JSON object: {"acts": [...]} where each act is one of:
@@ -82,7 +82,11 @@ Rules:
   the resources someone offers, accepts, trades to the bank or builds with are NOT claims,
   offering, accepting or declining is NOT a promise, and describing the move being made is
   NOT a plan. Never infer hand contents from an action's cost or outcome.
-- A claim must be said in words about a hand, beyond the action.
+- A claim is about CARDS IN HAND, said in words. Not a claim: "blocking / targeting X" on a robber
+  move (that is a hex), "I'm holding" or "holding for now" (passing, not holding cards), "looking
+  for / searching for / need X" (a want, not a lack), "you're focused on / producing / farming X"
+  (production, not cards). A claim about another player needs their cards asserted outright:
+  "you have brick", "you're out of wood", "I know you have the surplus".
 - A promise needs the speaker's word about FUTURE behaviour, beyond the action, towards a
   player named in the statement itself. Never invent a target; no named player, no promise.
 - A plan needs a specific future move of the speaker's own (what, and where if said).
@@ -237,6 +241,11 @@ def extract_run(log: dict, provider, model: str = EXTRACT_MODEL,
                     continue
                 if norm["type"] == "plan" and norm.get("do") == live_kind:
                     # "Building a road toward V14" on the build itself: narration
+                    dropped.append({**norm, "reason": "action-bound"})
+                    continue
+                if norm["type"] == "claim" and norm.get("about") and e.get("type") == "robber_move" \
+                        and norm.get("about") == e.get("victim"):
+                    # "blocking Roland's brick": the hex, not Roland's cards
                     dropped.append({**norm, "reason": "action-bound"})
                     continue
                 if norm["type"] == "claim" and not norm.get("about") and norm.get("resource") in bound_res:

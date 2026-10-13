@@ -83,6 +83,8 @@ def game_metrics(result: dict) -> dict:
                 elif sp.get("type") != "none":
                     m["statements"] += 1
                     bound = ev.get("action_bound")
+                    if not bound and sp.get("type") == "claim" and sp.get("about") and t == "robber_move":
+                        bound = "hex"            # pre-2026-10-13b logs: the engine did not tag it yet
                     if bound:
                         m["action_bound"] += 1
                         if bound == "inverted":

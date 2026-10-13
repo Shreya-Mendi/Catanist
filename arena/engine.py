@@ -501,6 +501,10 @@ class Game:
                 dec._claim_true = (sp["has"] == (holder.res.get(sp["resource"], 0) > 0))
             if not sp.get("about") and sp.get("resource") in live:
                 bound = "offer"
+            elif sp.get("about") and action == "rob":
+                # "blocking Roland's brick" tagged as a claim about Roland's hand:
+                # the resource names the hex being blocked, not the cards held
+                bound = "hex"
         elif t == "promise" and sp.get("act") == "will_trade" and sp.get("target") == partner:
             if sp.get("resource") in give:
                 bound = "offer"
