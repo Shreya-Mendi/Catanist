@@ -237,6 +237,8 @@ def test_extractor_v2():
                 {"type": "claim", "resource": "wood", "has": True},      # the offered resource
                 {"type": "promise", "act": "will_trade", "target": "Bo", "resource": "wood", "window": 3},
                 {"type": "promise", "act": "no_rob", "target": "Cy", "window": 3},   # Cy never named
+                {"type": "plan", "do": "propose_trade", "target": "Bo", "within": 1},   # narrates this very offer
+                {"type": "plan", "do": "build_road", "within": 1},                    # beyond the move
                 {"type": "announce", "text": "offer"}]})
     log = {"events": [
         {"type": "setup", "turn": 0, "players": [{"name": "Ana"}, {"name": "Bo"}, {"name": "Cy"}]},
@@ -244,19 +246,20 @@ def test_extractor_v2():
         {"type": "trade_proposal", "proposer": "Ana", "target": "Bo", "give": {"wood": 1},
          "want": {"brick": 1}, "turn": 1, "parse_ok": True,
          "public": "I'm looking to trade 1 wood for 1 brick, Bo! Sheep to spare too.",
-         "prompt": "Your resources: {'wood': 1, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}"},
+         "prompt": "Your resources: {'wood': 1, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}\nLegal actions: ['propose_trade', 'end_turn']"},
         {"type": "trade_response", "responder": "Bo", "accept": False, "turn": 1},
         {"type": "turn", "actor": "Bo", "turn": 2},
         {"type": "game_over", "turn": 2}]}
     out = extract_run(log, Fake(), "fake")
     r = out["records"][0]
-    assert [a["type"] for a in r["acts"]] == ["claim", "announce"], r["acts"]          # duplicate collapsed
+    assert [a["type"] for a in r["acts"]] == ["claim", "plan", "announce"], r["acts"]  # duplicate collapsed, narrated plan dropped
     assert r["acts"][0]["resource"] == "sheep" and r["acts"][0]["adjudicated"] is False  # claimed sheep, held none
+    assert r["acts"][1]["do"] == "build_road" and r["acts"][1]["adjudicated"] == "censored"  # game ended before Ana's next turn end
     assert [(d["type"], d["reason"]) for d in r["dropped"]] == \
-        [("claim", "action-bound"), ("promise", "action-bound"), ("promise", "target-not-named")]
+        [("claim", "action-bound"), ("promise", "action-bound"), ("promise", "target-not-named"), ("plan", "action-bound")]
     m = out["per_seat"]["Ana"]
-    assert (m["claims"], m["false_claims"], m["promises"], m["own_turns"]) == (1, 1, 0, 1)
-    assert m["informativeness"] == 1.0 and m["false_claim_rate"] == 1.0 and m["promise_break_rate"] is None
+    assert (m["claims"], m["false_claims"], m["promises"], m["plans"], m["own_turns"]) == (1, 1, 0, 1, 1)
+    assert m["informativeness"] == 2.0 and m["false_claim_rate"] == 1.0 and m["promise_break_rate"] is None
     print(f"extractor {EXTRACT_VERSION}: context, dedupe, action-bound and target filters, adjudication and rates behave")
 
 
@@ -291,5 +294,31 @@ def test_free_public_obligation():
     print("free public obligation: one resample, then flagged")
 
 
+def test_schema_v2_engine():
+    """v2 wiring: tags, registrations, plan resolutions and the metrics keys
+    appear in a typed game played by the mock (code test, not a run)."""
+    import json, collections
+    from arena.runner import build_players, _provider_cache
+    from arena.engine import Game
+    from arena.metrics import game_metrics
+    cfg = json.load(open(str(pathlib.Path(__file__).resolve().parent.parent / "configs/demo.json")))
+    cfg["speech_mode"] = "typed"
+    players = build_players(cfg, _provider_cache())
+    res = Game(players, seed=11, speech_mode="typed", max_turns=40).run()
+    ev = res["events"]
+    types = collections.Counter((e.get("speech") or {}).get("type") for e in ev if "parse_ok" in e)
+    assert types.get("plan", 0) > 0 and types.get("promise", 0) > 0 and types.get("claim", 0) > 0, types
+    assert any(e["type"] == "plan_resolved" for e in ev), "plans never resolved"
+    assert any(e.get("plan_id") for e in ev), "no plan registered"
+    assert all(e.get("public") for e in ev if "parse_ok" in e and e.get("speech_ok", True) and e.get("speech")), "every statement has a public line"
+    assert "hands_full" in next(e for e in ev if e.get("stamp"))["stamp"]
+    m = game_metrics(res)["players"]
+    seat = next(iter(m.values()))
+    assert "plans" in seat and "action_bound" in seat and "offer_promises" in seat
+    print(f"schema v2 engine: speech types {dict(types)}, plan events {sum(1 for e in ev if e['type']=='plan_resolved')}, "
+          f"action-bound {sum(1 for e in ev if e.get('action_bound'))}")
+
+
 if __name__ == "__main__":
     test_free_public_obligation()
+    test_schema_v2_engine()

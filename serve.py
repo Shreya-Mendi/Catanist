@@ -39,11 +39,11 @@ PALETTE = ["#7c5cff", "#e05c5c", "#b14b8a", "#3d9bf2", "#54c26a", "#f2a03d"]
 PROVIDERS = ["mock", "openai", "google", "tinker", "anthropic"]
 MODEL_PRESETS = {
     "mock": ["any/mock-model"],
-    "openai": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"],
+    "openai": ["gpt-4.1", "gpt-5.5", "gpt-5.2", "gpt-4o", "gpt-4o-mini"],
     "anthropic": ["claude-sonnet-5", "claude-haiku-4-5-20251001"],
     "google": ["gemini-2.5-flash", "gemini-2.5-pro"],
-    "tinker": ["Qwen/Qwen3-8B", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.8-27B",
-               "Qwen/Qwen3.6-35B-A3B",
+    "tinker": ["Qwen/Qwen3.8-27B", "Qwen/Qwen3.5-397B-A17B", "Qwen/Qwen3.6-27B",
+               "Qwen/Qwen3-8B", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.6-35B-A3B",
                "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
                "openai/gpt-oss-20b", "thinkingmachines/Inkling-Small"],
 }
@@ -310,11 +310,12 @@ claim / promise / announce acts by the extractor ({_esc(m.get('extracted_model')
 claims against the hand logged with that decision, promises by ledger replay. The LLM
 proposes structure only; it never decides truth. Pending human labels (the E1 kappa gate).</p>
 <table><tr><th>seat</th><th>statements</th><th>claims (false)</th>
-<th>promises k/b/d/e/c</th><th>announce / cond. / other</th><th>viol/stmt</th><th>informativeness</th></tr>""")
+<th>promises k/b/d/e/c</th><th>plans k/b/e/c</th><th>announce / cond. / other</th><th>viol/stmt</th><th>informativeness</th></tr>""")
         for name, pd in m["extracted"].items():
             head += (f"<tr><td><b>{_esc(name)}</b></td><td>{pd['statements']}</td>"
                      f"<td>{pd['claims']} ({pd['false_claims']})</td>"
                      f"<td>{pd['promises']}: {pd['kept']}/{pd['broken']}/{pd['declined']}/{pd['excused']}/{pd['censored']}</td>"
+                     f"<td>{pd.get('plans', 0)}: {pd.get('plans_kept', 0)}/{pd.get('plans_broken', 0)}/{pd.get('plans_excused', 0)}/{pd.get('plans_censored', 0)}</td>"
                      f"<td>{pd['announce']} / {pd['conditional']} / {pd['other']}</td>"
                      f"<td>{pd['violation_rate_per_statement']}</td>"
                      f"<td>{pd.get('informativeness')}</td></tr>")
@@ -327,13 +328,17 @@ proposes structure only; it never decides truth. Pending human labels (the E1 ka
                  + ". Run <code>python -m arena.extractor --backfill</code> on the server to score it.</p>")
     elif m:
         head += """<h2>Battery summary</h2>
-<table><tr><th>seat</th><th>coverage</th><th>statements</th><th>claims (false)</th>
-<th>promises k/b/e/c</th><th>viol/stmt</th><th>informativeness</th></tr>"""
+<p class="meta">Counts are statements beyond the live move. Action-bound = a tag that only
+restated the move being made (offer, inverted offer, narrated plan): logged, not scored.</p>
+<table><tr><th>seat</th><th>coverage</th><th>statements</th><th>action-bound</th><th>claims (false)</th>
+<th>promises k/b/e/c</th><th>plans k/b/e/c (≠private)</th><th>viol/stmt</th><th>informativeness</th></tr>"""
         for name, pd in m["players"].items():
-            pr = pd["promises"]
+            pr = pd["promises"]; pl = pd.get("plans") or {}
             head += (f"<tr><td><b>{_esc(name)}</b></td><td>{pd['coverage']}</td>"
-                     f"<td>{pd['statements']}</td><td>{pd['claims']} ({pd['false_claims']})</td>"
+                     f"<td>{pd['statements']}</td><td>{pd.get('action_bound', 0)}</td>"
+                     f"<td>{pd['claims']} ({pd['false_claims']})</td>"
                      f"<td>{pr['made']}: {pr['kept']}/{pr['broken']}/{pr['excused']}/{pr['censored']}</td>"
+                     f"<td>{pl.get('made', 0)}: {pl.get('kept', 0)}/{pl.get('broken', 0)}/{pl.get('excused', 0)}/{pl.get('censored', 0)} ({pl.get('private_mismatch', 0)})</td>"
                      f"<td>{pd['violation_rate_per_statement']}</td>"
                      f"<td>{pd['informativeness']}</td></tr>")
         head += "</table>"
@@ -372,6 +377,13 @@ proposes structure only; it never decides truth. Pending human labels (the E1 ka
             body.append(f"<div class='res {cls}'>PROMISE {e['status'].upper()}: "
                         f"{_esc(e['promiser'])} → {_esc(e['target'])} ({e['act']}, "
                         f"window {e['window']}, opportunities {e['opportunities']}{extra})</div>")
+            continue
+        if t == "plan_resolved":
+            cls = e["status"] if e["status"] in ("broken", "kept") else "other"
+            tgt = f" {_esc(e['target'])}" if e.get("target") else ""
+            body.append(f"<div class='res {cls}'>PLAN {e['status'].upper()}: "
+                        f"{_esc(e['planner'])} said {_esc(e['do'])}{tgt} within {e['window']} turn(s)"
+                        f"{'' if e.get('legal_ever') else ' (never legal in the window)'}</div>")
             continue
         if t == "trade_exec":
             body.append(f"<div class='ev'><b>trade executed</b> {_esc(e['proposer'])} ⇄ "
@@ -424,6 +436,13 @@ proposes structure only; it never decides truth. Pending human labels (the E1 ka
                 adj = "<span class='tag t-red'>CLAIM FALSE</span>"
             if sp.get("type") == "promise" and e.get("promise_id"):
                 adj += f"<span class='tag t-gray'>PROMISE #{e['promise_id']}</span>"
+            if sp.get("type") == "plan" and e.get("plan_id"):
+                adj += f"<span class='tag t-gray'>PLAN #{e['plan_id']}</span>"
+                if e.get("plan_private_match") is False:
+                    adj += "<span class='tag t-red'>PUBLIC PLAN ≠ PRIVATE PLAN</span>"
+            if e.get("action_bound"):
+                adj += (f"<span class='tag t-gray' title='restates the live move; not counted as "
+                        f"a statement beyond the action'>ACTION-BOUND ({_esc(e['action_bound'])})</span>")
             cls = "pub false" if e.get("claim_true") is False else "pub"
             blocks.append(f"<div class='panel {cls}'><b>SAYS TO THE TABLE "
                           f"({sp['type']}) {adj}</b>&ldquo;{_esc(e.get('public'))}&rdquo;"

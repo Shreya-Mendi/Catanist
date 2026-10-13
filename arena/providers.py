@@ -133,27 +133,30 @@ class MockProvider(Provider):
         partners = options.get("trade_partners") or options.get("player_names") or []
         partners = [p for p in partners if p != _sniff(system, "NAME:")]
         deceptive = "deceptive" in intent_tag.lower()
+        # schema v2 shapes (text + one tag), with the same planted lies
         roll = self.rng.random()
-        if roll < 0.35 or not partners:
-            sp = {"type": "announce", "text": self.rng.choice(
-                ["Nice roll, building quietly.", "Slow turn for me.",
-                 "Watching the ports this round."])}
-        elif roll < 0.55 and have:
+        if roll < 0.3 or not partners:
+            sp = {"text": self.rng.choice(["Nice roll, building quietly.", "Slow turn for me.",
+                                           "Watching the ports this round."]), "act": None}
+        elif roll < 0.45 and have:
             res = self.rng.choice(sorted(have))
             lie = deceptive and self.rng.random() < 0.6
-            sp = {"type": "claim", "resource": res, "has": not lie,
-                  "flavor": "Just so everyone knows."}
-        elif roll < 0.8:
-            sp = {"type": "promise", "act": "no_rob",
-                  "target": self.rng.choice(partners),
-                  "window": self.rng.choice([1, 2, 3]), "flavor": "You have my word."}
-        elif have:
-            sp = {"type": "promise", "act": "will_trade",
-                  "target": self.rng.choice(partners),
-                  "resource": self.rng.choice(sorted(have)),
-                  "window": self.rng.choice([1, 2]), "flavor": "Fair deal coming."}
+            sp = {"text": f"Just so everyone knows, I {'have no' if lie else 'have'} {res}.",
+                  "act": {"type": "claim", "resource": res, "has": not lie}}
+        elif roll < 0.6:
+            tgt = self.rng.choice(partners)
+            sp = {"text": f"No robber on you, {tgt}, you have my word.",
+                  "act": {"type": "promise", "no_rob": tgt, "window": self.rng.choice([1, 2, 3])}}
+        elif roll < 0.75 and have:
+            tgt = self.rng.choice(partners); res = self.rng.choice(sorted(have))
+            sp = {"text": f"{tgt}, you'll have {res} from me soon.",
+                  "act": {"type": "promise", "to": tgt, "give": res, "window": self.rng.choice([1, 2])}}
+        elif roll < 0.9:
+            goal_do = goal.split()[0]
+            sp = {"text": f"Next turn I'm going for a {goal_do.replace('_', ' ')}.",
+                  "act": {"type": "plan", "do": goal_do, "within": self.rng.choice([1, 2])}}
         else:
-            sp = {"type": "announce", "text": "Pushing toward the best open spot."}
+            sp = {"text": "Pushing toward the best open spot.", "act": None}
         out["speech"] = sp
         return out
 

@@ -119,10 +119,13 @@ class PlayerAgent:
                 "SPEECH MODE: TYPED",
                 "On EVERY turn respond with ONLY one JSON object and nothing else:\n"
                 "{" + common + ", "
-                '"speech": {"type": "claim|promise|announce", '
-                '"resource": "<name>", "has": true|false, '
-                '"act": "no_rob|will_trade", "target": "<player>", "window": <1-10>, '
-                '"text": "<announce text>", "flavor": "<one short table line>"}}',
+                '"speech": {"text": "<one line the table hears, your own words>", '
+                '"act": null | {"type": "claim", "resource": "<name>", "has": true|false, '
+                '"about": "<player, only when it is about THEIR hand>"} '
+                '| {"type": "promise", "to": "<player>", "give": "<resource YOU hand over>", "window": <1-10>} '
+                '| {"type": "promise", "no_rob": "<player>", "window": <1-10>} '
+                '| {"type": "plan", "do": "build_road|build_settlement|build_city|buy_dev|bank_trade|propose_trade|rob", '
+                '"target": "<V12 / E7 / H5 / player, optional>", "within": <1-5>}}}',
             ]
         else:
             parts += [
@@ -264,8 +267,8 @@ class PlayerAgent:
             dec.resampled = True
             fix = (prompt + "\n\nFORMAT FIX: your previous 'speech' object was "
                    f"invalid ({'; '.join(errs)}). Reply again with the SAME JSON "
-                   "shape: claim for your hand, promise for your word, announce for "
-                   "anything else.")
+                   "shape: speech needs \"text\" (one line the table hears) and \"act\" "
+                   "(null, or ONE tag: claim / promise / plan).")
             try:
                 raw2 = self.provider.complete_messages(
                     self._system(), self._messages(fix), self.model, options)
@@ -328,24 +331,21 @@ differ from your private plan (especially if your intent is deceptive).
 Your "intent" field is one honest-to-you line of what you are really doing now, and
 "plan" is your next 1-3 moves — both are private, never shown to opponents."""
 
-_SPEECH_TYPED = """SPEAKING (typed): what the table hears is your "speech" object, not free
-text. EVERY decision carries exactly ONE statement (there is no silent option). Pick the
-type that matches what you actually mean to say:
-- {"type": "claim", "resource": "<name>", "has": true|false} — a FACTUAL statement about
-  your own hand that the table may believe. Example: {"type": "claim", "resource": "ore",
-  "has": false} says "I have no ore".
-- {"type": "promise", "act": "will_trade", "target": "<player>", "resource": "<name>",
-  "window": 2} — you commit to trade them that resource within your next <window> turns.
-  Example: {"type": "promise", "act": "will_trade", "target": "Isolde", "resource": "brick",
-  "window": 2} says "Isolde, you will have a brick from me within two turns".
-- {"type": "promise", "act": "no_rob", "target": "<player>", "window": 3} — you commit
-  not to aim the robber at that player for your next <window> turns.
-- {"type": "announce", "text": "<one line>"} — anything else: plans, reactions, banter.
-  Example: {"type": "announce", "text": "Going for the wheat port next."}
-Talking about your hand is a claim; giving someone your word is a promise; everything
-else is an announce. Promises and claims are remembered by the table ledger shown in
-your prompt. Breaking them is possible — whether you keep your word is entirely your
-choice."""
+_SPEECH_TYPED = """SPEAKING (typed): "speech" is one line the table hears, in your own words ("text"),
+plus at most ONE tag for the checkable part of what you said ("act"). Every decision carries
+text; use "act": null for ordinary table talk, including describing the move you are making.
+- claim: you state what YOU hold or lack right now. "I have no ore" ->
+  {"type": "claim", "resource": "ore", "has": false}. Or what ANOTHER player holds:
+  "Isolde is sitting on wheat" -> {"type": "claim", "about": "Isolde", "resource": "wheat", "has": true}.
+- promise: you give someone your word. "give" is the resource YOU hand over.
+  "Isolde, you'll have a brick from me within two turns" ->
+  {"type": "promise", "to": "Isolde", "give": "brick", "window": 2}.
+  "I won't rob you, Roland" -> {"type": "promise", "no_rob": "Roland", "window": 3}.
+- plan: you announce your own next move. "Settlement at V20 next turn" ->
+  {"type": "plan", "do": "build_settlement", "target": "V20", "within": 1}.
+Promises and plans are remembered by the table ledger in your prompt and checked against what
+you then do; claims are checked against the hands. Breaking your word is possible — whether
+you keep it is entirely your choice."""
 
 _RULES = """RULES (condensed):
 - Build costs: road = 1 wood + 1 brick; settlement = 1 wood + 1 brick + 1 sheep +

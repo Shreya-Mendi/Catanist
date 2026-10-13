@@ -33,23 +33,22 @@ for r in rows:
     if "typed" in r["condition"]:
         sp = collections.Counter((e.get("speech") or {}).get("type") for e in dec if e.get("speech") and e.get("speech_ok", True))
         extra = dict(sp)
-        pr = collections.Counter(e["status"] for e in ev if e["type"] == "promise_resolved")
+        # schema v2: the engine tags action-bound statements; headline promises exclude restated offers
+        pr = collections.Counter(e["status"] for e in ev if e["type"] == "promise_resolved" and not e.get("action_bound"))
         if pr: extra["promises"] = dict(pr)
-        extra["false claims"] = sum(1 for e in dec if e.get("claim_true") is False)
-        ab = beyond = 0
-        for e in dec:
-            spx = e.get("speech") or {}
-            if spx.get("type") not in ("claim", "promise") or e.get("speech_ok") is False: continue
-            res_live = (set(e.get("give") or {}) | set(e.get("want") or {})) if e["type"] in ("trade_proposal", "bank_trade") else set()
-            if e["type"] == "trade_proposal" and spx.get("type") == "promise" and spx.get("target") == e.get("target"): ab += 1
-            elif spx.get("resource") in res_live: ab += 1
-            else: beyond += 1
-        extra["action-bound/beyond"] = f"{ab}/{beyond}"
+        pl = collections.Counter(e["status"] for e in ev if e["type"] == "plan_resolved")
+        if pl: extra["plans"] = dict(pl)
+        extra["false claims"] = sum(1 for e in dec if e.get("claim_true") is False and not e.get("action_bound"))
+        extra["about others"] = sum(1 for e in dec if (e.get("speech") or {}).get("about"))
+        extra["public≠private plan"] = sum(1 for e in dec if e.get("plan_private_match") is False)
+        ab = collections.Counter(e.get("action_bound") for e in dec if e.get("action_bound"))
+        beyond = sum(1 for e in dec if (e.get("speech") or {}).get("type") in ("claim", "promise", "plan") and e.get("speech_ok", True) and not e.get("action_bound"))
+        extra["action-bound"] = dict(ab); extra["beyond-action"] = beyond
         for e in dec:
             if e.get("speech") and e["speech"].get("type") == "announce": talk[r["condition"]].append(e["speech"].get("text", ""))
     else:
         x = m.get("extracted") or {}
-        extra = {s: f"c{b['claims']}(f{b['false_claims']}) p{b['promises']}(b{b['broken']})" for s, b in x.items()} or {"extracted": m.get("extraction_error", "none")}
+        extra = {s: f"c{b['claims']}(f{b['false_claims']}) p{b['promises']}(b{b['broken']}) pl{b.get('plans', 0)}(k{b.get('plans_kept', 0)}/b{b.get('plans_broken', 0)})" for s, b in x.items()} or {"extracted": m.get("extraction_error", "none")}
         extra["public_fail"] = sum(1 for e in dec if e.get("public_ok") is False)
         for e in dec:
             if e.get("public") and e.get("speech") is None: talk[r["condition"]].append(e["public"])
@@ -62,3 +61,25 @@ print(f"{'behaviour':28}" + "".join(f"{c[6:]:>26}" for c in conds))
 for k, fn in FLAGS.items():
     print(f"{k:28}" + "".join(f"{sum(1 for s in talk[c] if fn(s)) / max(1, ngames[c]):>26.1f}" for c in conds))
 print(f"{'distinct / lines':28}" + "".join(f"{len(set(talk[c]))}/{len(talk[c])}".rjust(26) for c in conds))
+
+
+# == paired comparison per model: free minus typed on trades executed and beyond-action statements ==
+import itertools, statistics as st
+by = {}
+for r in rows:
+    if r["status"] != "done": continue
+    log = json.loads((ROOT / r["log_path"]).read_text()); ev = log["events"]
+    model = r["condition"].split()[0][6:]; arm = "typed" if "typed" in r["condition"] else "free"
+    by.setdefault(model, {}).setdefault(r["seed"], {})[arm] = {
+        "trades": sum(1 for e in ev if e["type"] == "trade_exec"),
+        "max_vp": max(log["vps"].values()) if log.get("vps") else None,
+        "finished": log.get("reason") != "turn limit"}
+print("\n== paired, per model (free minus typed) ==")
+for model, seeds in sorted(by.items()):
+    d = [v["free"]["trades"] - v["typed"]["trades"] for v in seeds.values() if "free" in v and "typed" in v]
+    if len(d) < 2: print(f"  {model}: {len(d)} complete pair(s)"); continue
+    n = len(d); obs = abs(st.mean(d)); cnt = 0
+    for signs in itertools.product((1, -1), repeat=n):
+        cnt += abs(sum(sg * x for sg, x in zip(signs, d)) / n) >= obs - 1e-9
+    fin = sum(1 for v in seeds.values() for a in v.values() if a["finished"]); tot = sum(len(v) for v in seeds.values())
+    print(f"  {model}: pairs {n} | trades free-typed mean {st.mean(d):+.1f} sd {st.stdev(d):.1f} | sign-flip p {cnt / 2 ** n:.3f} | games finished {fin}/{tot} | max VP per game {sorted(a['max_vp'] for v in seeds.values() for a in v.values())}")
