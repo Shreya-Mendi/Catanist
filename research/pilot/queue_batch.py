@@ -23,6 +23,7 @@ ap.add_argument("--models", default=",".join(DEFAULT_MODELS))
 ap.add_argument("--seeds", default=None, help="e.g. 100-129")
 ap.add_argument("--turns", type=int, default=100)
 ap.add_argument("--owner", default="shreya")
+ap.add_argument("--hold", action="store_true", help="insert as held (released from the console or by status update)")
 a = ap.parse_args()
 models = [m.strip() for m in a.models.split(",") if m.strip()]
 if a.seeds:
@@ -47,7 +48,8 @@ with con:
                 cfg = {"scene": "harbor", "speech_mode": arm, "max_turns": a.turns, "seed": seed,
                        "name": f"{a.kind}-{short}-{arm}",
                        "players": [dict(s, provider=PROVIDER[model], model=model) for s in SEATS]}
-                con.execute("INSERT INTO runs(experiment_id,owner,config,condition,seed,max_turns,created) VALUES(?,?,?,?,?,?,?)",
-                            (eid, a.owner, json.dumps(cfg), f"model={short} arm={arm}", seed, a.turns, time.time()))
+                con.execute("INSERT INTO runs(experiment_id,owner,config,condition,seed,max_turns,status,created) VALUES(?,?,?,?,?,?,?,?)",
+                            (eid, a.owner, json.dumps(cfg), f"model={short} arm={arm}", seed, a.turns,
+                             "held" if a.hold else "queued", time.time()))
                 n += 1
-print(f"experiment {eid}: {n} runs queued ({len(seeds)} seeds x {len(models)} models x 2 arms, {a.turns} turns)")
+print(f"experiment {eid}: {n} runs {'held' if a.hold else 'queued'} ({len(seeds)} seeds x {len(models)} models x 2 arms, {a.turns} turns)")
