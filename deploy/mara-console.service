@@ -8,7 +8,7 @@ Type=simple
 User=mara
 WorkingDirectory=/opt/mara
 EnvironmentFile=/opt/mara/.env
-Environment=CONSOLE_WORKERS=10
+Environment=CONSOLE_WORKERS=8
 ExecStart=/opt/mara/.venv/bin/python run.py serve
 Restart=on-failure
 RestartSec=5
