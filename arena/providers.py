@@ -17,6 +17,18 @@ import random
 import re
 
 
+import threading
+_USAGE = threading.local()
+
+
+def take_usage():
+    """Token usage of the last completion on this thread, then cleared.
+    Providers that report none (Tinker) leave it empty."""
+    u = getattr(_USAGE, "last", None)
+    _USAGE.last = None
+    return u
+
+
 class Provider:
     def complete_messages(self, system, messages, model, options):
         """Multi-turn call: `messages` is the alternating user/assistant history
@@ -332,6 +344,11 @@ class GitHubModelsProvider(Provider):
                         model=model, messages=msgs, **kw)
                 if isinstance(resp, str):   # newer openai SDKs return the text directly
                     return resp
+                u = getattr(resp, "usage", None)
+                if u is not None:            # token usage for the cost ledger (per thread = per game)
+                    _USAGE.last = {"model": model,
+                                   "input": int(getattr(u, "prompt_tokens", 0) or 0),
+                                   "output": int(getattr(u, "completion_tokens", 0) or 0)}
                 return resp.choices[0].message.content or ""
             except Exception as e:
                 # only back off on genuinely transient errors (rate-limit / timeout /

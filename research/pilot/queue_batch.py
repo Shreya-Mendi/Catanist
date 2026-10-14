@@ -26,6 +26,8 @@ ap.add_argument("--owner", default="shreya")
 ap.add_argument("--hold", action="store_true", help="insert as held (released from the console or by status update)")
 a = ap.parse_args()
 models = [m.strip() for m in a.models.split(",") if m.strip()]
+for m in models:                                   # provider by id prefix for ids not listed above
+    PROVIDER.setdefault(m, "openai" if m.startswith(("gpt-", "o3", "o4")) else "tinker")
 if a.seeds:
     lo, hi = a.seeds.split("-"); seeds = list(range(int(lo), int(hi) + 1))
 else:

@@ -26,13 +26,14 @@ def _claim(con):
     with the fewest games in flight goes first, ties in queue order, so a
     teammate's single run does not wait behind a 180-game batch."""
     with con:
-        rows = con.execute("SELECT id, owner FROM runs WHERE status='queued' "
-                           "ORDER BY id").fetchall()
+        rows = con.execute("SELECT id, owner, COALESCE(priority, 0) AS priority FROM runs "
+                           "WHERE status='queued' ORDER BY id").fetchall()
         if not rows:
             return None
         running = dict(con.execute("SELECT owner, COUNT(*) FROM runs WHERE status='running' "
                                    "GROUP BY owner").fetchall())
-        best = min(rows, key=lambda r: (running.get(r["owner"], 0), r["id"]))
+        # fairness across users first, then 'run next' priority, then queue order
+        best = min(rows, key=lambda r: (running.get(r["owner"], 0), r["priority"], r["id"]))
         got = con.execute("UPDATE runs SET status='running', started=? "
                           "WHERE id=? AND status='queued'",
                           (time.time(), best["id"])).rowcount
@@ -84,11 +85,30 @@ def _work(worker_id: int):
                     print(f"[jobs] extraction failed for {path.name}: "
                           f"{type(e).__name__}: {e}", flush=True)
                     mdict["extraction_error"] = f"{type(e).__name__}: {e}"[:300]
+            # coverage gate (battery v1 rule, enforced 2026-10-14): a game in which
+            # any seat played fewer than 95% of its decisions itself (provider
+            # errors -> engine fallback) is kept but marked, and requeued once
+            covs = [pd.get("coverage") for pd in (mdict.get("players") or {}).values()]
+            low = [c for c in covs if c is not None and c < 0.95]
+            if low:
+                mdict["low_coverage"] = min(low)
+                row = con.execute("SELECT config, condition, seed, max_turns, owner, experiment_id, error "
+                                  "FROM runs WHERE id=?", (rid,)).fetchone()
+                already = "requeue of run" in (row["error"] or "")
+                with con:
+                    if not already:
+                        con.execute("INSERT INTO runs(experiment_id,owner,config,condition,seed,max_turns,"
+                                    "status,error,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                                    (row["experiment_id"], row["owner"], row["config"], row["condition"],
+                                     row["seed"], row["max_turns"], "queued",
+                                     f"requeue of run {rid} (coverage {min(low):.2f})", time.time()))
+                print(f"[jobs] run {rid}: low coverage {min(low):.2f}"
+                      + ("" if already else ", requeued once"), flush=True)
             metrics = json.dumps(mdict)
             with con:
-                con.execute("UPDATE runs SET status='done', finished=?, "
+                con.execute("UPDATE runs SET status=?, finished=?, "
                             "log_path=?, metrics=? WHERE id=?",
-                            (time.time(), f"logs/{path.name}", metrics, rid))
+                            ("low_coverage" if low else "done", time.time(), f"logs/{path.name}", metrics, rid))
             live.unlink(missing_ok=True)
         except Exception as e:
             live.unlink(missing_ok=True)

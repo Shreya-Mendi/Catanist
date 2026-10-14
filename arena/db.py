@@ -55,6 +55,8 @@ def connect() -> sqlite3.Connection:
     cols = {r[1] for r in con.execute("PRAGMA table_info(runs)")}
     if "progress_vps" not in cols:
         con.execute("ALTER TABLE runs ADD COLUMN progress_vps TEXT")
+    if "priority" not in cols:
+        con.execute("ALTER TABLE runs ADD COLUMN priority INTEGER DEFAULT 0")
         con.commit()
     return con
 
@@ -74,6 +76,13 @@ def create_user(name: str, password: str, is_admin: bool = False):
         con.execute("INSERT OR REPLACE INTO users(name,salt,pwhash,is_admin,created) "
                     "VALUES(?,?,?,?,?)", (name, salt, pw, int(is_admin), time.time()))
     con.close()
+
+
+def is_admin(name: str) -> bool:
+    con = connect()
+    row = con.execute("SELECT is_admin FROM users WHERE name=?", (name,)).fetchone()
+    con.close()
+    return bool(row and row["is_admin"])
 
 
 def verify_user(name: str, password: str) -> bool:

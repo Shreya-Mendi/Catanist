@@ -245,6 +245,56 @@ def _compare_html(ra, rb, la, lb):
             f"</div>{js}</body></html>")
 
 
+LIST_PRICES_USD_PER_M = {   # (input, output) per million tokens; list prices as noted, verify before quoting
+    "gpt-4.1": (2.0, 8.0), "gpt-4o": (2.5, 10.0), "gpt-4o-mini": (0.15, 0.6), "gpt-4.1-mini": (0.4, 1.6),
+    "gpt-5": (1.25, 10.0), "gpt-5-mini": (0.25, 2.0), "gpt-5.2": (1.25, 10.0), "gpt-5.5": (None, None),
+}
+
+
+def _list_price(model: str, tokens_in: int, tokens_out: int):
+    pi, po = LIST_PRICES_USD_PER_M.get(model, (None, None))
+    if pi is None or po is None:
+        return None
+    return round(tokens_in / 1e6 * pi + tokens_out / 1e6 * po, 2)
+
+
+def _move_line(e: dict, events: list, idx: int, with_name: bool = True) -> str:
+    """One plain sentence for what the engine did at a decision event."""
+    t = e.get("type")
+    who = (e.get("actor") or e.get("proposer") or e.get("responder") or "?") if with_name else ""
+    who = who.strip()
+    def bundle(b):
+        return " + ".join(f"{n} {r}" for r, n in (b or {}).items()) or "nothing"
+    if t == "build":
+        where = f"V{e['vertex']}" if e.get("vertex") is not None else f"E{e['edge']}" if e.get("edge") is not None else ""
+        return f"{who} builds a {e.get('kind')} at {where}" + (" (setup)" if e.get("setup") else "")
+    if t == "trade_proposal":
+        fate = "no answer recorded"
+        for x in events[idx + 1: idx + 8]:
+            if x.get("type") == "trade_response" and x.get("responder") == e.get("target"):
+                fate = "accepted" if x.get("accept") else ("declined, could not cover" if x.get("private") == "(cannot cover the request)" else "declined")
+                break
+        return f"{who} offers {bundle(e.get('give'))} for {bundle(e.get('want'))} to {e.get('target')}: {fate}"
+    if t == "trade_response":
+        offer = next((x for x in reversed(events[max(0, idx - 6):idx]) if x.get("type") == "trade_proposal" and x.get("target") == who), None)
+        what = f" {offer['proposer']}'s offer of {bundle(offer.get('give'))} for {bundle(offer.get('want'))}" if offer else " the offer"
+        return f"{who} {'accepts' if e.get('accept') else 'declines'}{what}"
+    if t == "bank_trade":
+        return f"{who} trades {bundle(e.get('give'))} to the bank for {bundle(e.get('want'))}"
+    if t == "robber_move":
+        return (f"{who} moves the robber to H{e.get('hex')}"
+                + (f", robs {e['victim']}" + (f" ({e['stole']})" if e.get("stole") else "") if e.get("victim") else ", nobody to rob"))
+    if t == "dev_buy":
+        return f"{who} buys a development card"
+    if t == "dev_play":
+        return f"{who} plays {e.get('card')}"
+    if t == "pass":
+        return f"{who} ends the turn"
+    if t == "discard":
+        return f"{who} discards {bundle(e.get('dropped'))}"
+    return f"{who}: {t}"
+
+
 def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
     """A research-grade, verbatim transcript: every decision with its full
     private reasoning, intent, plan, typed speech, adjudications and engine
@@ -283,6 +333,8 @@ def _transcript_html(run_row, log: dict, metrics_json: str | None) -> str:
  .t-gray{{background:#e8edf1;color:#5c6b77}}
  .res{{font-weight:600;margin:6px 0}}
  .res.broken{{color:#a4265f}} .res.kept{{color:#137a88}} .res.other{{color:#5c6b77}}
+ details.board{{font-weight:400;font-size:13px;margin:6px 0 0}} details.board summary{{cursor:pointer;color:#5c6b77}}
+ details.board svg{{display:block;margin:6px 0}}
  @media print{{body{{background:#fff}} .dec{{break-inside:avoid}}}}
 </style></head><body><div class="wrap">
 <h1>Run #{run_row['id']} — verbatim transcript</h1>
@@ -360,11 +412,18 @@ restated the move being made (offer, inverted offer, narrated plan): logged, not
                         return "<div class='res kept'>OUTCOME: accepted — trade executed</div>"
                 return f"<div class='res other'>OUTCOME: {_esc(e.get('target'))} accepted (could not cover)</div>"
         return "<div class='res other'>OUTCOME: no response recorded</div>"
+    from viz.boardsvg import state_at, board_svg, legend
+    colors = {p_["name"]: p_.get("color", "#333") for p_ in setup}
+    board = log.get("board") or {}
     for idx, e in enumerate(log["events"]):
         t = e["type"]
         a = e.get("actor") or e.get("proposer") or e.get("responder")
         if t == "turn":
-            body.append(f"<div class='turn'>Turn {e['n']} — {_esc(e['actor'])}</div>")
+            snap = board_svg(board, state_at(log, idx), colors, width=300, title=f"board at turn {e['n']}") if board else ""
+            body.append(f"<div class='turn'>Turn {e['n']} — {_esc(e['actor'])}"
+                        + (f"<details class='board'><summary>board at this turn</summary>{snap}"
+                           f"<div class='meta'>{legend(colors)} · black dot = robber</div></details>" if snap else "")
+                        + "</div>")
             continue
         if t == "roll":
             body.append(f"<div class='ev'>rolled {e['total']}</div>"); continue
@@ -402,6 +461,7 @@ restated the move being made (offer, inverted offer, narrated plan): logged, not
                 "discard": lambda: f"discards {e.get('dropped')}",
                 "pass": lambda: "ends the turn (no action taken)",
                 }.get(t, lambda: t)()
+        desc = _esc(_move_line(e, events_all, idx, with_name=False)).strip()
         tags = ""
         if e.get("played_by") == "heuristic":
             tags += "<span class='tag t-red'>ENGINE FALLBACK</span>"
@@ -575,6 +635,74 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0) or 0)
         return json.loads(self.rfile.read(n) or b"{}")
 
+    def _labelqueue_items(self, con, rid, user, only_idx=None):
+        """Statements of one run still unlabeled by `user`, with everything the
+        labeler should see first (move, tag, board, scores) and the Tier-B fields
+        the UI reveals only after the label is saved."""
+        row = con.execute("SELECT log_path FROM runs WHERE id=?", (rid,)).fetchone()
+        log = json.loads((ROOT / row["log_path"]).read_text())
+        have = {r["event_idx"] for r in con.execute(
+            "SELECT event_idx FROM labels WHERE run_id=? AND labeler=?", (rid, user))}
+        items = []
+        evs = log["events"]
+        running_vps = {}                       # fallback for pre-stamp logs
+        from viz.boardsvg import state_at, board_svg
+        board = log.get("board") or {}
+        colors = {p_["name"]: p_.get("color", "#333") for p_ in (evs[0].get("players", []) if evs else [])}
+        for i, e in enumerate(evs):
+            if e.get("type") == "vp" and e.get("totals"):
+                running_vps = dict(e["totals"])
+            pub = e.get("public")
+            if not pub or i in have or "parse_ok" not in e:
+                continue
+            if only_idx is not None and i != only_idx:
+                continue
+            recent = []
+            for x in evs[max(0, i - 14):i]:
+                xa = x.get("actor") or x.get("proposer") or x.get("responder")
+                if x.get("public"):
+                    recent.append({"who": xa, "say": x["public"]})
+                elif x["type"] in ("build", "robber_move", "trade_exec", "roll"):
+                    what = {"build": f"builds {x.get('kind','')}",
+                            "robber_move": "moves the robber"
+                            + (f" onto {x['victim']}" if x.get("victim") else ""),
+                            "trade_exec": "trade executed",
+                            "roll": f"rolls {x.get('total')}"}[x["type"]]
+                    recent.append({"who": xa, "ev": what})
+            stamp = e.get("stamp") or {}
+            sp = e.get("speech") or None
+            # the engine's own reading of the statement, stored with the
+            # label so agreement with the engine / extractor is computable
+            verdict = None
+            if sp and sp.get("type") == "claim" and e.get("claim_true") is not None:
+                verdict = "true claim" if e["claim_true"] else "false claim"
+            elif sp and sp.get("type") in ("promise", "plan"):
+                for x in evs[i + 1:]:
+                    if x.get("type") == "promise_resolved" and x.get("promise_id") == e.get("promise_id") and e.get("promise_id"):
+                        verdict = f"promise {x['status']}"; break
+                    if x.get("type") == "plan_resolved" and x.get("plan_id") == e.get("plan_id") and e.get("plan_id"):
+                        verdict = f"plan {x['status']}"; break
+            items.append({"event_idx": i, "statement": pub,
+                          "who": e.get("actor") or e.get("proposer")
+                          or e.get("responder"),
+                          "turn": e.get("turn"),
+                          "event": e.get("type"),
+                          "move": _move_line(e, evs, i),
+                          "tag": sp,
+                          "action_bound": e.get("action_bound"),
+                          "verdict": verdict,
+                          "vps": stamp.get("vps") or running_vps,
+                          "hands": stamp.get("hands", {}),
+                          "board": board_svg(board, state_at(log, i), colors, width=320) if board else "",
+                          # Tier B, shown only after the label is saved
+                          "reasoning": e.get("private"),
+                          "intent": e.get("intent"),
+                          "private_plan": [st.get("step") for st in (e.get("plan") or [])],
+                          "recent": recent[-7:]})
+            if len(items) >= 25:
+                break
+        return items
+
     # --- GET --------------------------------------------------------------
     def do_GET(self):
         u = urlparse(self.path)
@@ -597,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
         con = db.connect()
         try:
             if path == "/api/me":
-                return self._send(200, {"user": user})
+                return self._send(200, {"user": user, "is_admin": db.is_admin(user)})
             if path == "/api/models":
                 return self._send(200, _live_models(q.get("provider", ["mock"])[0]))
             if path == "/api/catalog":
@@ -610,6 +738,8 @@ class Handler(BaseHTTPRequestHandler):
                 rows = [dict(r) for r in con.execute(
                     "SELECT e.id,e.name,e.owner,e.hypothesis,e.notes,e.created,"
                     "SUM(CASE WHEN r.status='done' THEN 1 ELSE 0 END) done,"
+                    "SUM(CASE WHEN r.status='held' THEN 1 ELSE 0 END) held,"
+                    "SUM(CASE WHEN r.status='low_coverage' THEN 1 ELSE 0 END) low_coverage,"
                     "SUM(CASE WHEN r.status='failed' THEN 1 ELSE 0 END) failed,"
                     "SUM(CASE WHEN r.status IN('queued','running') THEN 1 ELSE 0 END) active,"
                     "COUNT(r.id) total FROM experiments e LEFT JOIN runs r "
@@ -669,45 +799,39 @@ class Handler(BaseHTTPRequestHandler):
                                         "winner": log.get("winner"),
                                         "vps": log.get("vps"),
                                         "lines": _transcript(log)})
+            if path == "/api/labelqueue" and q.get("task"):
+                # a stratified label task (research/pilot/sample_for_labels.py):
+                # every labeler sees the same (run, event) pairs, in the same order
+                tf = ROOT / "research" / "exports" / f"labeltask_{Path(q['task'][0]).name}.json"
+                if not tf.exists():
+                    return self._send(404, {"err": "no such label task"})
+                task = json.loads(tf.read_text())["items"]
+                done = {(r["run_id"], r["event_idx"]) for r in con.execute(
+                    "SELECT run_id, event_idx FROM labels WHERE labeler=?", (user,))}
+                todo = [it for it in task if (it["run_id"], it["event_idx"]) not in done][:25]
+                items = []
+                for it in todo:
+                    one = self._labelqueue_items(con, it["run_id"], user, only_idx=it["event_idx"])
+                    if one:
+                        one[0]["cell"] = it.get("cell"); items.append(one[0])
+                return self._send(200, {"items": items, "remaining": len(task) - len(done)})
             if path == "/api/labelqueue":
                 rid = int(q["run_id"][0])
-                row = con.execute("SELECT log_path FROM runs WHERE id=?", (rid,)).fetchone()
-                log = json.loads((ROOT / row["log_path"]).read_text())
-                have = {r["event_idx"] for r in con.execute(
-                    "SELECT event_idx FROM labels WHERE run_id=? AND labeler=?",
-                    (rid, user))}
-                items = []
-                evs = log["events"]
-                running_vps = {}                       # fallback for pre-stamp logs
-                for i, e in enumerate(evs):
-                    if e.get("type") == "vp" and e.get("totals"):
-                        running_vps = dict(e["totals"])
-                    pub = e.get("public")
-                    if not pub or i in have or "parse_ok" not in e:
-                        continue
-                    recent = []
-                    for x in evs[max(0, i - 14):i]:
-                        xa = x.get("actor") or x.get("proposer") or x.get("responder")
-                        if x.get("public"):
-                            recent.append({"who": xa, "say": x["public"]})
-                        elif x["type"] in ("build", "robber_move", "trade_exec", "roll"):
-                            what = {"build": f"builds {x.get('kind','')}",
-                                    "robber_move": "moves the robber"
-                                    + (f" onto {x['victim']}" if x.get("victim") else ""),
-                                    "trade_exec": "trade executed",
-                                    "roll": f"rolls {x.get('total')}"}[x["type"]]
-                            recent.append({"who": xa, "ev": what})
-                    stamp = e.get("stamp") or {}
-                    items.append({"event_idx": i, "statement": pub,
-                                  "who": e.get("actor") or e.get("proposer")
-                                  or e.get("responder"),
-                                  "turn": e.get("turn"),
-                                  "vps": stamp.get("vps") or running_vps,
-                                  "hands": stamp.get("hands", {}),
-                                  "recent": recent[-7:]})
-                    if len(items) >= 25:
-                        break
-                return self._send(200, items)
+                return self._send(200, self._labelqueue_items(con, rid, user))
+            if path == "/api/experiment-usage":
+                # tokens and list-price cost per experiment, per model, from the run metrics
+                eid = int(q["id"][0])
+                tot = {}
+                for r in con.execute("SELECT condition, metrics FROM runs WHERE experiment_id=? AND status='done'", (eid,)):
+                    m = json.loads(r["metrics"] or "{}")
+                    for pd in (m.get("players") or {}).values():
+                        tk = pd.get("tokens") or {}
+                        key = pd.get("model") or "?"
+                        t = tot.setdefault(key, {"input": 0, "output": 0, "games": set()})
+                        t["input"] += tk.get("input", 0); t["output"] += tk.get("output", 0); t["games"].add(r["condition"])
+                out = {k: {"input": v["input"], "output": v["output"],
+                           "list_price_usd": _list_price(k, v["input"], v["output"])} for k, v in tot.items()}
+                return self._send(200, out)
             if path.startswith("/exports/"):
                 f = ROOT / "research" / "exports" / Path(unquote(path[len("/exports/"):])).name
                 if f.exists():
@@ -766,6 +890,24 @@ class Handler(BaseHTTPRequestHandler):
                              time.time()))
                 return self._send(200, {"ok": True, "experiment_id": eid,
                                         "queued": len(b["batch"])})
+            if path == "/api/experiment/control":
+                # hold | release | next for a whole experiment (owner or admin)
+                eid, action = int(b["id"]), b["action"]
+                exp = con.execute("SELECT owner FROM experiments WHERE id=?", (eid,)).fetchone()
+                if not exp:
+                    return self._send(404, {"err": "no such experiment"})
+                if exp["owner"] != user and not db.is_admin(user):
+                    return self._send(403, {"err": "not your experiment"})
+                with con:
+                    if action == "hold":
+                        n = con.execute("UPDATE runs SET status='held' WHERE experiment_id=? AND status='queued'", (eid,)).rowcount
+                    elif action == "release":
+                        n = con.execute("UPDATE runs SET status='queued', error=NULL WHERE experiment_id=? AND status='held'", (eid,)).rowcount
+                    elif action == "next":
+                        n = con.execute("UPDATE runs SET priority=-1 WHERE experiment_id=? AND status='queued'", (eid,)).rowcount
+                    else:
+                        return self._send(400, {"err": "action must be hold, release or next"})
+                return self._send(200, {"ok": True, "changed": n})
             if path == "/api/preview":
                 # verbatim prompts for every seat of a config, before anything runs
                 cfg = b["config"]
@@ -788,8 +930,9 @@ class Handler(BaseHTTPRequestHandler):
                         "INSERT OR REPLACE INTO labels(run_id,event_idx,statement,"
                         "context,label,labeler,created) VALUES(?,?,?,?,?,?,?)",
                         (b["run_id"], b["event_idx"], b.get("statement", ""),
-                         json.dumps(b.get("context", [])), b["label"], user,
-                         time.time()))
+                         json.dumps({"recent": b.get("context", []), "verdict": b.get("verdict"),
+                                     "tag": b.get("tag"), "action_bound": b.get("action_bound")}),
+                         b["label"], user, time.time()))
                 return self._send(200, {"ok": True})
             if path == "/api/annotation":
                 with con:

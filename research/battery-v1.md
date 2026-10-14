@@ -301,3 +301,30 @@ plans. Memory is layer 3 as a prompt recap (addendum 2026-10-12).
 with one real turn each on 2026-10-13: gpt-4.1 (4 s), gpt-5.5 (16 s), gpt-5.2
 (6 s), Qwen/Qwen3.8-27B (13 s), Qwen/Qwen3.5-397B-A17B (37 s); DeepSeek-V3.1
 and Kimi-K2.6 failed on the first reply (unparseable JSON; tokenizer error).
+
+## Addendum 2026-10-14 (platform: coverage gate enforced, rule-wording arm, token ledger, labeler protocol)
+- **Coverage gate enforced.** The 0.95 rule (Integrity) now acts: a finished game in
+  which any seat played under 95% of its decisions itself gets status
+  `low_coverage` (kept, excluded from aggregates) and is requeued once. Before,
+  the metric existed but nothing read it; the 2026-10-14 credit outage would
+  have produced heuristic-played games counted as data.
+- **Rule-wording arm.** `prompt_variant` A|B|C selects one of three wordings of
+  the typed speaking rules (A = reference; B = compact prose; C = schema only;
+  same rules, same examples removed in C). The robustness check from the
+  reviewer list: headline rates should not move with the wording.
+- **Token ledger.** Every decision logs the tokens of the call that produced it
+  (`usage`, from OpenAI-compatible responses; Tinker reports none); per-seat
+  `tokens` in the battery; per-experiment totals and a list-price estimate in
+  the console (prices in `serve.LIST_PRICES_USD_PER_M`, approximate, to verify).
+- **Labeler protocol.** The labeler sees the board, scores, hand sizes, recent
+  talk, the move the statement accompanies and the speaker's own tag; the
+  engine's verdict and the speaker's private reasoning, intent and plan are
+  revealed only after the label is saved, so Tier B cannot anchor Tier A.
+  Label tasks are stratified samples (model x arm x tag kind, 25 per cell by
+  default) served identically to every labeler; `research/pilot/kappa.py`
+  reports labeler-labeler and labeler-engine agreement with unclear excluded.
+- **Queue.** Fair across users (fewest games in flight first), then an explicit
+  'run next' priority, then queue order; hold and release per experiment.
+- **Model set for E1 (final, cost-first):** gpt-5 (30 seeds), gpt-5.5 (15),
+  Qwen3.8-27B (30), Nemotron-3.5-Lightning-30B-A3B (30), gpt-oss-120b (15);
+  gpt-4.1 (10 pairs) and Qwen3.5-397B-A17B (11 pairs) kept as secondary.

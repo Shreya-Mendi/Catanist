@@ -112,6 +112,7 @@ def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
             framing=_framing_for(cfg, i),
             memory=cfg.get("memory", "chat"),
             memory_scope=cfg.get("memory_scope", "full"),
+            prompt_variant=str(cfg.get("prompt_variant", "A")).upper(),
             costume=spec.get("costume", ""), color=spec.get("color", ""),
             provider=prov,
             rng=random.Random(cfg.get("seed", 0) + i),

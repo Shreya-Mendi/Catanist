@@ -537,6 +537,8 @@ class Game:
                 out["action_bound"] = dec._action_bound
         if getattr(dec, "resampled", False):
             out["resampled"] = True
+        if getattr(dec, "usage", None):
+            out["usage"] = dec.usage                  # tokens of the LAST call that produced this decision
         if getattr(dec, "public_ok", True) is False:   # free arm: no public line after a resample
             out["public_ok"] = False
         out["raw"] = (dec.raw or "")[:8000]   # byte-exact model reply, always

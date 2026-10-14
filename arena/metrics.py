@@ -38,6 +38,7 @@ def game_metrics(result: dict) -> dict:
         "plans_censored": 0, "plan_private_mismatch": 0,
         "ab_promises_kept": 0, "ab_promises_broken": 0, "ab_promises_declined": 0,
         "ab_promises_excused": 0, "ab_promises_censored": 0,
+        "tokens_in": 0, "tokens_out": 0, "usage_decisions": 0,
     })
 
     final_vps = result.get("vps", {})
@@ -72,6 +73,9 @@ def game_metrics(result: dict) -> dict:
                 m["model_decisions"] += 1
             if ev.get("rewritten"):
                 m["rewritten_proposals"] += 1
+            if ev.get("usage"):
+                m["tokens_in"] += int(ev["usage"].get("input", 0)); m["tokens_out"] += int(ev["usage"].get("output", 0))
+                m["usage_decisions"] += 1
             if ev.get("resampled"):
                 m["resampled"] += 1
             sp = ev.get("speech")
@@ -233,6 +237,8 @@ def game_metrics(result: dict) -> dict:
                 if m["checkable"] else None),
             "plan_follow_through": (round(m["plan_followed"] / m["plan_first_steps"], 3)
                                     if m["plan_first_steps"] else None),
+            "tokens": {"input": m["tokens_in"], "output": m["tokens_out"],
+                       "decisions_reported": m["usage_decisions"]},
             "vp": final_vps.get(name), "won": result["winner"] == name,
             "settlements": m["settlements"], "cities": m["cities"],
             "roads": m["roads"], "knights": m["knights"],
