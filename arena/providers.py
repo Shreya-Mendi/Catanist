@@ -477,7 +477,11 @@ class TinkerProvider(Provider):
                 prompt = types.ModelInput.from_ints(list(ids))
                 # callers may raise the budget (the extractor needs room for 8 items
                 # plus gpt-oss's reasoning channel); default stays the decision size
-                params = types.SamplingParams(max_tokens=int((options or {}).get("max_tokens", 1100)),
+                # reply budget: verbose open models (Nemotron's numbered reasoning,
+                # gpt-oss's analysis channel) overran 1100 tokens in E1 and fell
+                # to engine fallback; 2500 by default, 4000 for gpt-oss
+                default_budget = 4000 if "gpt-oss" in str(model) else 2500
+                params = types.SamplingParams(max_tokens=int((options or {}).get("max_tokens", default_budget)),
                                               temperature=float((options or {}).get("temperature", 0.8)))
                 fut = sc.sample(prompt=prompt, sampling_params=params, num_samples=1)
                 result = fut.result() if hasattr(fut, "result") else fut
