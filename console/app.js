@@ -489,6 +489,8 @@ async function renderLabelTab(){
       ${field("Run",null,`<select id="l-run">
         ${runs.map(r=>`<option value="${r.id}">#${r.id} ${r.ename} · ${pretty(r.condition)} · seed ${r.seed}</option>`).join("")}</select>`,
         "free-speech runs are the E1 validation set")}
+      ${field("Label task",null,`<input id="l-task" placeholder="e.g. e1-round1" style="min-width:140px">`,
+        "a stratified sample across runs that every labeler sees in the same order; leave empty to label one run")}
       <button class="ghost" onclick="loadLabels()">start labeling</button>
       <a class="ghost" id="l-replay" target="_blank" data-info="The illustrated replay of this run — watch the whole game to see how it progressed.">watch the game</a>
       <a class="ghost" id="l-transcript" target="_blank" data-info="The full research transcript: every decision, reasoning, and adjudication.">read the transcript</a></div>
@@ -500,7 +502,12 @@ async function renderLabelTab(){
 }
 let queue=[],qi=0;
 async function loadLabels(){
-  queue=await api("/api/labelqueue?run_id="+$("#l-run").value); qi=0; drawLabel(); }
+  const task=($("#l-task")?.value||"").trim();
+  if(task){ const r=await api("/api/labelqueue?task="+encodeURIComponent(task));
+    if(r&&r.err){ alert(r.err); return; }
+    queue=(r.items||[]).map(it=>({...it,_task_remaining:r.remaining})); }
+  else queue=await api("/api/labelqueue?run_id="+$("#l-run").value);
+  qi=0; drawLabel(); }
 function drawLabel(){
   const out=$("#l-out");
   if(qi>=queue.length){ out.innerHTML="<p class='kv'>Queue done for this run — pick another.</p>"; return; }
@@ -539,7 +546,7 @@ function drawLabel(){
 }
 async function sendLabel(l){
   const it=queue[qi];
-  await api("/api/label",{run_id:+$("#l-run").value,event_idx:it.event_idx,
+  await api("/api/label",{run_id:it.run_id||+$("#l-run").value,event_idx:it.event_idx,
     statement:it.statement,context:(it.recent||[]).map(r=>r.say||r.ev),
     verdict:it.verdict,tag:it.tag,action_bound:it.action_bound,label:l});
   // Tier B and the engine's reading are shown only now, so they cannot steer the label

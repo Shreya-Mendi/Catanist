@@ -836,7 +836,7 @@ class Handler(BaseHTTPRequestHandler):
                 for it in todo:
                     one = self._labelqueue_items(con, it["run_id"], user, only_idx=it["event_idx"])
                     if one:
-                        one[0]["cell"] = it.get("cell"); items.append(one[0])
+                        one[0]["cell"] = it.get("cell"); one[0]["run_id"] = it["run_id"]; items.append(one[0])
                 return self._send(200, {"items": items, "remaining": len(task) - len(done)})
             if path == "/api/labelqueue":
                 rid = int(q["run_id"][0])
