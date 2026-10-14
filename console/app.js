@@ -547,6 +547,7 @@ async function sendLabel(l){
   $("#l-reveal").innerHTML=`<div class="boardbox" style="margin-top:10px">
     <label data-info="The engine's own adjudication of the tagged statement, from the game state and the speaker's later moves. Revealed after your label so it cannot anchor you.">engine verdict</label>
     <div>${it.verdict?esc(it.verdict):"not adjudicable (no checkable tag)"}</div>
+    ${it.extracted?`<div class="small" style="margin-top:4px" data-info="What the extractor read in this free-text line, and what it dropped as narration of the move. Compare with your label.">extractor (${esc(it.extracted.by||"?")}): ${esc(JSON.stringify(it.extracted.acts.map(a=>Object.fromEntries(Object.entries(a).filter(([k])=>!["text","flavor","promise_id","plan_id"].includes(k))))))}${it.extracted.dropped.length?` · dropped ${it.extracted.dropped.length} as action-bound`:""}</div>`:""}
     <label style="margin-top:8px" data-info="The speaker's private reasoning, intent and plan at this decision (Tier B). Never shown to the other players.">what the speaker was privately thinking</label>
     <div class="t-dim">intent: ${esc(it.intent||"—")}</div>
     <div class="t-dim">plan: ${esc((it.private_plan||[]).join(" → ")||"—")}</div>

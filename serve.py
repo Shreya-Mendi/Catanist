@@ -643,6 +643,16 @@ class Handler(BaseHTTPRequestHandler):
         log = json.loads((ROOT / row["log_path"]).read_text())
         have = {r["event_idx"] for r in con.execute(
             "SELECT event_idx FROM labels WHERE run_id=? AND labeler=?", (rid, user))}
+        # free games: the extractor's reading per statement (hidden until the label is saved)
+        side = ROOT / row["log_path"].replace(".json", "_extracted.json")
+        extracted = {}
+        if side.exists():
+            try:
+                x = json.loads(side.read_text())
+                extracted = {r_["event_idx"]: r_ for r_ in x.get("records", [])}
+                extracted["_model"] = f"{x.get('model')} {x.get('version')}"
+            except Exception:
+                extracted = {}
         items = []
         evs = log["events"]
         running_vps = {}                       # fallback for pre-stamp logs
@@ -674,6 +684,17 @@ class Handler(BaseHTTPRequestHandler):
             # the engine's own reading of the statement, stored with the
             # label so agreement with the engine / extractor is computable
             verdict = None
+            xr = extracted.get(i) if extracted else None
+            if xr and not sp:                # free text: verdict from the extractor's acts
+                acts_ = xr.get("acts", [])
+                if any(a["type"] == "claim" and a.get("adjudicated") is False for a in acts_):
+                    verdict = "false claim (extractor)"
+                elif any(a["type"] in ("promise", "plan") and a.get("adjudicated") == "broken" for a in acts_):
+                    verdict = "promise or plan broken (extractor)"
+                elif any(a["type"] == "claim" and a.get("adjudicated") is True for a in acts_):
+                    verdict = "true claim (extractor)"
+                elif any(a["type"] in ("promise", "plan") and a.get("adjudicated") in ("kept", "declined", "excused") for a in acts_):
+                    verdict = "promise or plan " + next(a["adjudicated"] for a in acts_ if a["type"] in ("promise", "plan") and a.get("adjudicated") in ("kept", "declined", "excused")) + " (extractor)"
             if sp and sp.get("type") == "claim" and e.get("claim_true") is not None:
                 verdict = "true claim" if e["claim_true"] else "false claim"
             elif sp and sp.get("type") in ("promise", "plan"):
@@ -695,6 +716,8 @@ class Handler(BaseHTTPRequestHandler):
                           "hands": stamp.get("hands", {}),
                           "board": board_svg(board, state_at(log, i), colors, width=320) if board else "",
                           # Tier B, shown only after the label is saved
+                          "extracted": ({"by": extracted.get("_model"), "acts": xr.get("acts", []),
+                                         "dropped": xr.get("dropped", [])} if xr and not sp else None),
                           "reasoning": e.get("private"),
                           "intent": e.get("intent"),
                           "private_plan": [st.get("step") for st in (e.get("plan") or [])],
