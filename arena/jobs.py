@@ -22,15 +22,21 @@ _started = False
 
 
 def _claim(con):
+    """Next run to play. Fair across console users (2026-10-14): the user
+    with the fewest games in flight goes first, ties in queue order, so a
+    teammate's single run does not wait behind a 180-game batch."""
     with con:
-        row = con.execute("SELECT id FROM runs WHERE status='queued' "
-                          "ORDER BY id LIMIT 1").fetchone()
-        if not row:
+        rows = con.execute("SELECT id, owner FROM runs WHERE status='queued' "
+                           "ORDER BY id").fetchall()
+        if not rows:
             return None
+        running = dict(con.execute("SELECT owner, COUNT(*) FROM runs WHERE status='running' "
+                                   "GROUP BY owner").fetchall())
+        best = min(rows, key=lambda r: (running.get(r["owner"], 0), r["id"]))
         got = con.execute("UPDATE runs SET status='running', started=? "
                           "WHERE id=? AND status='queued'",
-                          (time.time(), row["id"])).rowcount
-        return row["id"] if got else None
+                          (time.time(), best["id"])).rowcount
+        return best["id"] if got else None
 
 
 def _work(worker_id: int):
@@ -40,8 +46,9 @@ def _work(worker_id: int):
         if rid is None:
             time.sleep(1.5)
             continue
-        cfg = json.loads(con.execute("SELECT config FROM runs WHERE id=?",
-                                     (rid,)).fetchone()["config"])
+        row = con.execute("SELECT config, owner FROM runs WHERE id=?", (rid,)).fetchone()
+        cfg = json.loads(row["config"])
+        cfg["_owner"] = row["owner"]                  # per-user API keys (providers.owner_key_name)
         from .runner import LOG_DIR
         live = LOG_DIR / f".live_run{rid}.json"
         cfg["_live_path"] = str(live)

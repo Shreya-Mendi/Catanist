@@ -53,10 +53,18 @@ def load_env(path: Path | None = None) -> None:
 def _provider_cache():
     cache: dict[str, object] = {}
 
-    def get(name, seed=None):
+    def get(name, seed=None, owner=None):
+        from .providers import has_owner_key
         key = f"{name}:{seed}" if name == "mock" else name
+        if name == "openai" and has_owner_key("OPENAI_API_KEY", owner):
+            key = f"openai:{owner}"                   # that user's own key and billing
         if key not in cache:
-            cache[key] = get_provider(name, seed=seed) if name == "mock" else get_provider(name)
+            if name == "mock":
+                cache[key] = get_provider(name, seed=seed)
+            elif name == "openai":
+                cache[key] = get_provider(name, owner=owner)
+            else:
+                cache[key] = get_provider(name)
         return cache[key]
 
     return get
@@ -92,7 +100,7 @@ def _framing_for(cfg: dict, i: int) -> str:
 def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
     players = []
     for i, spec in enumerate(cfg["players"]):
-        prov = provider_get(spec["provider"], seed=cfg.get("seed", 0) + i)
+        prov = provider_get(spec["provider"], seed=cfg.get("seed", 0) + i, owner=cfg.get("_owner"))
         players.append(PlayerAgent(
             name=spec["name"], model=spec["model"],
             persona=spec.get("persona", "neutral"),

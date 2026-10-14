@@ -46,3 +46,19 @@ requeues any orphaned runs, and the team logs back in with the same accounts.
 ## Frozen
 Game rules, speech schema, and the violation battery (research/battery-v1.md,
 with dated addenda). Rule changes are battery-version conversations, not edits.
+
+## Per-user API keys (2026-10-14)
+
+Runs are billed to the console user who queued them when that user has a key in
+`/opt/mara/.env`: `OPENAI_API_KEY_<USER>` with the user name upper-cased and
+non-alphanumerics replaced by `_`, for example
+`OPENAI_API_KEY_DECEPTION_PERCEPTION=sk-...`. Without one, the shared
+`OPENAI_API_KEY` is used. The queue is fair across users: the user with the
+fewest games in flight goes next. New keys are read when a worker process
+starts: either `sudo systemctl restart mara-console` (interrupts games in
+flight; they are requeued) or start sidecar workers that join the live server:
+
+```
+cd /opt/mara && sudo -u mara env CONSOLE_RECOVER=0 CONSOLE_WORKERS=2 \
+  .venv/bin/python -c "from arena.runner import load_env; load_env(); from arena import jobs; import time; jobs.start_workers(); [time.sleep(60) for _ in iter(int, 1)]"
+```

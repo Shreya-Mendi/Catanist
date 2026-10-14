@@ -253,9 +253,14 @@ class OpenAIProvider(Provider):
     BACKOFF = (4, 10, 20)
     _last_call = 0.0
 
-    def __init__(self):
+    def __init__(self, owner: str | None = None):
         import openai  # lazy
-        key = os.environ.get("OPENAI_API_KEY")
+        # per-user billing (2026-10-14): a run owned by console user X uses
+        # OPENAI_API_KEY_X (X upper-cased, non-alphanumerics -> _) when that
+        # variable exists in .env, else the shared OPENAI_API_KEY
+        key = os.environ.get(owner_key_name("OPENAI_API_KEY", owner)) if owner else None
+        self.key_source = owner if key else "shared"
+        key = key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise RuntimeError(
                 "OpenAI needs a key: put OPENAI_API_KEY=sk-... in Catanist/.env")
@@ -463,9 +468,22 @@ _REGISTRY = {
 }
 
 
+def owner_key_name(base: str, owner: str | None) -> str:
+    """OPENAI_API_KEY + console user 'deception_perception' ->
+    OPENAI_API_KEY_DECEPTION_PERCEPTION."""
+    return base + "_" + re.sub(r"[^A-Za-z0-9]+", "_", str(owner or "")).upper().strip("_")
+
+
+def has_owner_key(base: str, owner: str | None) -> bool:
+    return bool(owner) and bool(os.environ.get(owner_key_name(base, owner)))
+
+
 def get_provider(name: str, **kw) -> Provider:
     if name not in _REGISTRY:
         raise KeyError(f"unknown provider {name!r}; have {list(_REGISTRY)}")
+    owner = kw.pop("owner", None)
+    if name == "openai" and owner:
+        return _REGISTRY[name](owner=owner)
     return _REGISTRY[name](**kw)
 
 
