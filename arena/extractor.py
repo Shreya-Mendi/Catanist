@@ -111,13 +111,18 @@ Players: {players}. Speaker: {speaker}. Statement: "{statement}" """
 
 
 def _hand_from_prompt(prompt: str) -> dict | None:
-    m = re.search(r"Your resources:\s*(\{[^}]*\})", prompt or "")
-    if not m:
-        return None
-    try:
-        return ast.literal_eval(m.group(1))
-    except Exception:
-        return None
+    """The hand line of the turn prompt. The LAST match wins: the recap block
+    and private notes earlier in the prompt can quote text that looks like a
+    hand line (a set literal there crashed the rescore on 2026-10-14)."""
+    ms = re.findall(r"Your resources:\s*(\{[^}]*\})", prompt or "")
+    for txt in reversed(ms):
+        try:
+            v = ast.literal_eval(txt)
+        except Exception:
+            continue
+        if isinstance(v, dict):
+            return v
+    return None
 
 
 def _bundle(b) -> str:

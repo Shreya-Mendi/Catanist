@@ -17,6 +17,14 @@ for r in rows:
     log = json.loads((ROOT / r["log_path"]).read_text())
     m = game_metrics(log)
     cfg = json.loads(r["config"] or "{}")
+    old = json.loads(r["metrics"] or "{}")
+    if extract and cfg.get("speech_mode") == "free" and "--force" not in sys.argv \
+            and old.get("extracted") and old.get("extracted_model") == __import__("arena.extractor", fromlist=["extractor_choice"]).extractor_choice()[1]:
+        # already read by the current extractor: keep it (resume after a crash)
+        m["extracted"] = old["extracted"]; m["extracted_model"] = old["extracted_model"]; m["extracted_version"] = old.get("extracted_version")
+        with con:
+            con.execute("UPDATE runs SET metrics=? WHERE id=?", (json.dumps(m), r["id"]))
+        n += 1; print(f"run {r['id']}: rescored (extraction kept)"); continue
     if extract and cfg.get("speech_mode") == "free":
         from arena.extractor import attach_extraction, extractor_choice
         pname, pmodel = extractor_choice()
