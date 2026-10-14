@@ -212,80 +212,110 @@ def _action_bound_promise_targets(events: list, i: int) -> set:
     return set()
 
 
+EXTRACT_BATCH = 8   # statements per extractor call (2026-10-14): one call per statement was
+                    # 500 calls a game; batching cuts calls and cost ~8x for any extractor
+
+
+def _batch_prompt(items: list, players: list) -> str:
+    """The single-statement rules, applied to a numbered list of statements.
+    Output: {"1": {"acts": [...]}, "2": {...}, ...} keyed by item number."""
+    head = EXTRACT_PROMPT.split("ENGINE CONTEXT: {context}")[0]
+    rules = EXTRACT_PROMPT.split("ENGINE CONTEXT: {context}")[1].split("Players: {players}.")[0]
+    head = head.replace('Output ONLY a JSON object: {"acts": [...]} where each act is one of:',
+                        'Output ONLY a JSON object keyed by item number, {"1": {"acts": [...]}, "2": {"acts": [...]}, ...}, '
+                        'where each act is one of:')
+    lines = [f"Players: {players}. Items (each has its own speaker and ENGINE CONTEXT):"]
+    for k, (who, ctx, pub) in enumerate(items, 1):
+        lines.append(f'[{k}] Speaker: {who}. ENGINE CONTEXT: {ctx}. Statement: "{pub.replace(chr(34), chr(39))}"')
+    return head + "Rules apply to every item.\n" + rules + "\n".join(lines)
+
+
 def extract_run(log: dict, provider, model: str = EXTRACT_MODEL,
-                progress=None) -> dict:
+                progress=None, batch: int = EXTRACT_BATCH) -> dict:
     events = log["events"]
     players = [p["name"] for p in events[0].get("players", [])]
     records = []
-    # 1) LLM extraction per free statement (events with public text, no typed speech)
+    # 1) LLM extraction per free statement (events with public text, no typed speech),
+    #    `batch` statements per call
+    todo = []
     for i, e in enumerate(events):
         pub = e.get("public")
         if not pub or "parse_ok" not in e or e.get("speech") is not None:
             continue
         who = e.get("actor") or e.get("proposer") or e.get("responder")
-        raw = provider.complete(
-            "You are a precise annotator. Reply with JSON only.",
-            (EXTRACT_PROMPT.replace("{players}", str(players)).replace("{speaker}", str(who))
-             .replace("{context}", _context_for(e))
-             .replace("{statement}", pub.replace('"', "'"))),
-            model, {})
+        todo.append((i, e, who, pub))
+    for b0 in range(0, len(todo), max(1, batch)):
+        chunk = todo[b0:b0 + max(1, batch)]
+        prompt = _batch_prompt([(who, _context_for(e), pub) for (_, e, who, pub) in chunk], players)
+        raw = provider.complete("You are a precise annotator. Reply with JSON only.", prompt, model,
+                                {"max_tokens": 4000, "temperature": 0.2})
         try:
-            acts = json.loads(re.search(r"\{.*\}", raw, re.S).group(0)).get("acts", [])
+            parsed = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
         except Exception:
-            acts = [{"type": "other", "text": "<extractor parse failure>"}]
-        valid, dropped, seen = [], [], set()
-        bound = _action_bound_promise_targets(events, i)
-        bound_res = _action_bound_resources(events, i)
-        live_kind, _ = _event_kind(e)
-        for a in acts:
-            if a.get("type") in ("claim", "promise", "announce", "plan"):
-                norm, errs = validate_speech({**a, "text": pub[:160]} if a.get("type") != "announce" else a, who, players)
-                if errs:
-                    valid.append({"type": "other", "text": f"invalid:{errs[0][:40]}"})
-                    continue
-                key = json.dumps({k: v for k, v in norm.items() if k != "flavor"}, sort_keys=True)
-                if key in seen:                    # one act per distinct claim/promise
-                    continue
-                seen.add(key)
-                if norm["type"] == "promise" and norm.get("act") == "will_trade" \
-                        and norm.get("target") in bound:
-                    # the live offer or answer restated as "I'll trade you X": the
-                    # engine executes that trade itself, so it is not a commitment
-                    # beyond the action (v1 scored these kept/broken)
-                    dropped.append({**norm, "reason": "action-bound"})
-                    continue
-                if norm["type"] == "plan" and norm.get("do") == live_kind:
-                    # "Building a road toward V14" on the build itself: narration
-                    dropped.append({**norm, "reason": "action-bound"})
-                    continue
-                if norm["type"] == "claim" and norm.get("about") and e.get("type") == "robber_move" \
-                        and norm.get("about") == e.get("victim"):
-                    # "blocking Roland's brick": the hex, not Roland's cards
-                    dropped.append({**norm, "reason": "action-bound"})
-                    continue
-                if norm["type"] == "claim" and not norm.get("about") and norm.get("resource") in bound_res:
-                    # "I'll trade you a brick" / "here's my brick": the resource
-                    # the engine is moving in this very action (v2.1 still let
-                    # role-inverted has:false claims through on acceptances)
-                    dropped.append({**norm, "reason": "action-bound"})
-                    continue
-                if norm["type"] == "promise" and \
-                        str(norm.get("target", "")).lower() not in pub.lower():
-                    # "never invent a target": a promise is to a player the
-                    # statement names; "you" in an answer is the live offer anyway
-                    dropped.append({**norm, "reason": "target-not-named"})
-                    continue
-                valid.append(norm)
+            parsed = {}
+        for k, (i, e, who, pub) in enumerate(chunk, 1):
+            item = parsed.get(str(k)) if isinstance(parsed, dict) else None
+            if item is None and k == 1 and isinstance(parsed, dict) and "acts" in parsed:
+                item = parsed                     # single-statement reply shape
+            if isinstance(item, dict) and isinstance(item.get("acts"), list):
+                acts = item["acts"]
+            elif isinstance(item, list):
+                acts = item
             else:
-                valid.append({"type": a.get("type", "other"), "text": str(a.get("text", ""))[:120]})
-        if not any(v["type"] in ("claim", "promise", "announce", "conditional") for v in valid) and dropped:
-            valid.append({"type": "announce", "text": pub[:120]})
-        rec = {"event_idx": i, "turn": e.get("turn"), "who": who,
-               "event": e.get("type"), "context": _context_for(e),
-               "statement": pub, "acts": valid}
-        if dropped:
-            rec["dropped"] = dropped
-        records.append(rec)
+                acts = [{"type": "other", "text": "<extractor parse failure>"}]
+            valid, dropped, seen = [], [], set()
+            bound = _action_bound_promise_targets(events, i)
+            bound_res = _action_bound_resources(events, i)
+            live_kind, _ = _event_kind(e)
+            for a in acts:
+                if a.get("type") in ("claim", "promise", "announce", "plan"):
+                    norm, errs = validate_speech({**a, "text": pub[:160]} if a.get("type") != "announce" else a, who, players)
+                    if errs:
+                        valid.append({"type": "other", "text": f"invalid:{errs[0][:40]}"})
+                        continue
+                    key = json.dumps({k: v for k, v in norm.items() if k != "flavor"}, sort_keys=True)
+                    if key in seen:                    # one act per distinct claim/promise
+                        continue
+                    seen.add(key)
+                    if norm["type"] == "promise" and norm.get("act") == "will_trade" \
+                            and norm.get("target") in bound:
+                        # the live offer or answer restated as "I'll trade you X": the
+                        # engine executes that trade itself, so it is not a commitment
+                        # beyond the action (v1 scored these kept/broken)
+                        dropped.append({**norm, "reason": "action-bound"})
+                        continue
+                    if norm["type"] == "plan" and norm.get("do") == live_kind:
+                        # "Building a road toward V14" on the build itself: narration
+                        dropped.append({**norm, "reason": "action-bound"})
+                        continue
+                    if norm["type"] == "claim" and norm.get("about") and e.get("type") == "robber_move" \
+                            and norm.get("about") == e.get("victim"):
+                        # "blocking Roland's brick": the hex, not Roland's cards
+                        dropped.append({**norm, "reason": "action-bound"})
+                        continue
+                    if norm["type"] == "claim" and not norm.get("about") and norm.get("resource") in bound_res:
+                        # "I'll trade you a brick" / "here's my brick": the resource
+                        # the engine is moving in this very action (v2.1 still let
+                        # role-inverted has:false claims through on acceptances)
+                        dropped.append({**norm, "reason": "action-bound"})
+                        continue
+                    if norm["type"] == "promise" and \
+                            str(norm.get("target", "")).lower() not in pub.lower():
+                        # "never invent a target": a promise is to a player the
+                        # statement names; "you" in an answer is the live offer anyway
+                        dropped.append({**norm, "reason": "target-not-named"})
+                        continue
+                    valid.append(norm)
+                else:
+                    valid.append({"type": a.get("type", "other"), "text": str(a.get("text", ""))[:120]})
+            if not any(v["type"] in ("claim", "promise", "announce", "conditional") for v in valid) and dropped:
+                valid.append({"type": "announce", "text": pub[:120]})
+            rec = {"event_idx": i, "turn": e.get("turn"), "who": who,
+                   "event": e.get("type"), "context": _context_for(e),
+                   "statement": pub, "acts": valid}
+            if dropped:
+                rec["dropped"] = dropped
+            records.append(rec)
         if progress:
             progress(len(records))
     by_idx = {r["event_idx"]: r for r in records}

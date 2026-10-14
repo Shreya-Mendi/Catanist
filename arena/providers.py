@@ -29,6 +29,21 @@ def take_usage():
     return u
 
 
+
+def _final_channel(text: str) -> str:
+    """Harmony-format replies (gpt-oss): "<|channel|>analysis<|message|>...<|end|>
+    <|channel|>final<|message|>{json}". Keep only the final channel; a reply
+    with analysis but no final channel keeps the text after the last message
+    marker. Other models pass through unchanged."""
+    if "<|channel|>" not in text:
+        return text
+    finals = re.findall(r"<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|$)", text, re.S)
+    if finals:
+        return finals[-1].strip()
+    parts = text.split("<|message|>")
+    return parts[-1].split("<|end|>")[0].strip()
+
+
 class Provider:
     def complete_messages(self, system, messages, model, options):
         """Multi-turn call: `messages` is the alternating user/assistant history
@@ -439,6 +454,8 @@ class TinkerProvider(Provider):
             system, [{"role": "user", "content": user}], model, options)
 
     def complete_messages(self, system, messages, model, options):
+        if "gpt-oss" in str(model) and "Reasoning:" not in (system or ""):
+            system = "Reasoning: low\n" + (system or "")
         import re as _re
         import time
         from tinker import types
@@ -458,12 +475,16 @@ class TinkerProvider(Provider):
                 if ids and isinstance(ids[0], (list, tuple)):
                     ids = ids[0]
                 prompt = types.ModelInput.from_ints(list(ids))
-                params = types.SamplingParams(max_tokens=1100, temperature=0.8)
+                # callers may raise the budget (the extractor needs room for 8 items
+                # plus gpt-oss's reasoning channel); default stays the decision size
+                params = types.SamplingParams(max_tokens=int((options or {}).get("max_tokens", 1100)),
+                                              temperature=float((options or {}).get("temperature", 0.8)))
                 fut = sc.sample(prompt=prompt, sampling_params=params, num_samples=1)
                 result = fut.result() if hasattr(fut, "result") else fut
                 text = tok.decode(result.sequences[0].tokens)
                 for end in ("<|im_end|>", "<|endoftext|>", "</s>"):
                     text = text.split(end)[0]
+                text = _final_channel(text)          # gpt-oss Harmony channels
                 return _re.sub(r"<think>.*?</think>", "", text, flags=_re.S).strip()
             except Exception as e:
                 last = e

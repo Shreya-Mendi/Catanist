@@ -19,3 +19,4 @@ logs/arena.db-*
 research/exports/
 .venv/
 logs/.live_run*.json
+.extractor
