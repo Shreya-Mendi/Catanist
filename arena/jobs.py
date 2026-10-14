@@ -76,8 +76,9 @@ def _work(worker_id: int):
             if cfg.get("speech_mode") == "free" and \
                     os.environ.get("CONSOLE_EXTRACT", "1") != "0":
                 try:
-                    from .extractor import attach_extraction
-                    out = attach_extraction(result, path, _providers("openai"))
+                    from .extractor import attach_extraction, extractor_choice
+                    pname, pmodel = extractor_choice()
+                    out = attach_extraction(result, path, _providers(pname), pmodel)
                     mdict["extracted"] = out["per_seat"]
                     mdict["extracted_model"] = out["model"]
                     mdict["extracted_version"] = out["version"]

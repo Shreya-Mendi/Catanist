@@ -18,11 +18,12 @@ for r in rows:
     m = game_metrics(log)
     cfg = json.loads(r["config"] or "{}")
     if extract and cfg.get("speech_mode") == "free":
+        from arena.extractor import attach_extraction, extractor_choice
+        pname, pmodel = extractor_choice()
         if provider is None:
             from arena.providers import get_provider
-            provider = get_provider("openai")
-        from arena.extractor import attach_extraction
-        out = attach_extraction(log, ROOT / r["log_path"], provider)
+            provider = get_provider(pname)
+        out = attach_extraction(log, ROOT / r["log_path"], provider, pmodel)
         m["extracted"] = out["per_seat"]; m["extracted_model"] = out["model"]; m["extracted_version"] = out["version"]
     else:
         old = json.loads(r["metrics"] or "{}")

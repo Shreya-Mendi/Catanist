@@ -52,7 +52,22 @@ from pathlib import Path
 from .ledger import PromiseLedger, PlanLedger
 from .speech import validate_speech
 
-EXTRACT_MODEL = "gpt-4.1"   # 2026-10-13: the extractor is a tool, not a player; a full-size model reads free text better
+EXTRACT_MODEL = "gpt-4.1"   # default; overridden per deployment by ROOT/.extractor (see extractor_choice)
+EXTRACT_PROVIDER = "openai"
+
+
+def extractor_choice():
+    """(provider, model) for extraction, read at call time from ROOT/.extractor
+    ("<provider> <model>", e.g. "tinker openai/gpt-oss-120b"), else the defaults.
+    2026-10-14: lets the box switch to a funded open model without a restart;
+    the choice is recorded in every extraction's "model" field."""
+    from .runner import LOG_DIR
+    f = LOG_DIR.parent / ".extractor"
+    if f.exists():
+        parts = f.read_text().split()
+        if len(parts) == 2:
+            return parts[0], parts[1]
+    return EXTRACT_PROVIDER, EXTRACT_MODEL
 EXTRACT_VERSION = "v2.5-2026-10-13"
 
 EXTRACT_PROMPT = """You convert ONE table-talk statement from a Settlers of Catan game into
@@ -378,10 +393,17 @@ def extract_run(log: dict, provider, model: str = EXTRACT_MODEL,
             "version": EXTRACT_VERSION}
 
 
-def attach_extraction(result: dict, log_path: Path, provider, model: str = EXTRACT_MODEL) -> dict:
+def attach_extraction(result: dict, log_path: Path, provider=None, model: str | None = None) -> dict:
     """Run the extractor on a finished free-arm game, write the sidecar
     <log>_extracted.json next to the log, and return the per-seat battery to
-    merge into the run's metrics under "extracted"."""
+    merge into the run's metrics under "extracted". With no provider given,
+    the deployment's choice (ROOT/.extractor) decides provider and model."""
+    if provider is None or model is None:
+        pname, pmodel = extractor_choice()
+        if provider is None:
+            from .providers import get_provider
+            provider = get_provider(pname)
+        model = model or pmodel
     out = extract_run(result, provider, model)
     log_path.with_name(log_path.stem + "_extracted.json").write_text(json.dumps(out, indent=1))
     return out
@@ -404,7 +426,8 @@ def _backfill(force: bool):
     from .runner import load_env, LOG_DIR
     from .providers import get_provider
     load_env()
-    provider = get_provider("openai")
+    pname, pmodel = extractor_choice()
+    provider = get_provider(pname)
     root = LOG_DIR.parent
     con = db.connect()
     rows = con.execute("SELECT id, log_path, metrics, config FROM runs "
@@ -421,7 +444,7 @@ def _backfill(force: bool):
         if not p.exists():
             print(f"run {r['id']}: log missing ({r['log_path']})")
             continue
-        out = attach_extraction(json.loads(p.read_text()), p, provider)
+        out = attach_extraction(json.loads(p.read_text()), p, provider, pmodel)
         m["extracted"] = out["per_seat"]
         m["extracted_model"] = out["model"]
         m["extracted_version"] = out["version"]
@@ -441,7 +464,8 @@ def main():
     load_env()
     path = Path(sys.argv[1])
     log = json.loads(path.read_text())
-    out = attach_extraction(log, path, get_provider("openai"))
+    pname, pmodel = extractor_choice()
+    out = attach_extraction(log, path, get_provider(pname), pmodel)
     print(f"extracted {len(out['records'])} statements -> {path.stem}_extracted.json ({out['version']})")
     _print_summary(out)
 
