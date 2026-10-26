@@ -3,7 +3,8 @@
 <title>MARA: Deception — Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/fonts.css">
 <link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <canvas id="world"></canvas>
@@ -21,7 +22,7 @@
 <div id="tipbox" hidden></div>
 
 <div id="login" hidden><div class="card login-card">
-  <div class="logo-row"><span class="hexmark"></span><h2>Catanist</h2></div>
+  <div class="logo-row"><span class="hexmark"></span><h2>MARA: Deception</h2></div>
   <p class="hint">Whitelist logins only. Ask Shreya for an account.</p>
   <label>Name</label><input id="li-name" style="width:100%" autocomplete="username">
   <label style="margin-top:12px">Password</label>
@@ -33,8 +34,8 @@
 <div class="shell">
 <header>
   <div class="logo-row"><span class="hexmark big"></span>
-    <div><div class="brand">Catanist</div>
-      <div class="tagline">MARA: Deception · say one thing — the engine remembers what you did</div></div></div>
+    <div><div class="brand">MARA: Deception</div>
+      <div class="tagline">Catanist console · say one thing, the engine remembers what you did</div></div></div>
   <div class="spacer"></div>
   <span id="who" class="chip"></span>
   <button class="ghost" onclick="logout()">Log out</button>
@@ -58,5 +59,6 @@
 <footer>battery v1 frozen · rules and metrics are not knobs · keys never leave the server</footer>
 </div>
 <script src="/static/world.js"></script>
+<script src="/static/md.js"></script>
 <script src="/static/app.js"></script>
 </body></html>

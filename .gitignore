@@ -20,3 +20,6 @@ research/exports/
 .venv/
 logs/.live_run*.json
 .extractor
+
+# local-only test login for browser checks (never committed)
+.local-test-login

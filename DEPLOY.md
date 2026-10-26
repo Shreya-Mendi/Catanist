@@ -62,3 +62,37 @@ flight; they are requeued) or start sidecar workers that join the live server:
 cd /opt/mara && sudo -u mara env CONSOLE_RECOVER=0 CONSOLE_WORKERS=2 \
   .venv/bin/python -c "from arena.runner import load_env; load_env(); from arena import jobs; import time; jobs.start_workers(); [time.sleep(60) for _ in iter(int, 1)]"
 ```
+
+## Reasoning models (2026-10-24)
+
+gpt-5 family seats send `reasoning_effort` (default `low`) and a 3,000-token completion cap. Set `OPENAI_REASONING_EFFORT=minimal|low|medium|high` in `.env` to change it for every gpt-5 call; hidden reasoning is billed as output, so pilot 3 seeds and read the ledger before scaling.
+
+## Platform round of 2026-10-25
+
+- New tables and columns (overrides, run_scores, groups, group_members, group_files, activity;
+  labels.reason, experiments.group_id/prereg, runs.excluded/exclude_reason/metrics_corrected/cost_usd)
+  migrate themselves on the first `db.connect()` after the ship. Nothing to run.
+- Group files live under `logs/groups/<id>/` (outside git, next to the game logs).
+- Prices changed (Tinker priced, gpt-6 family added). Re-price finished games once after the ship:
+  `cd /opt/mara && sudo -u mara .venv/bin/python -c "from arena import db, costs; print(costs.backfill_costs(db.connect(), force=True))"`
+- Fonts load from api.fontshare.com (Satoshi, Clash Display); the console falls back to system fonts offline.
+- Seed the E1 package group on the box with the local research files (they stay out of git):
+  copy `research/e1/*`, `research/research-notes.md`, `research/budget-2026-10-25.md` to the box's
+  `research/` first, then `python research/pilot/seed_e1_group.py --root /opt/mara`.
+
+## Data layout and the ship order (2026-10-25)
+
+Game logs now live in `logs/<hypothesis>/<experiment>/` (for example
+`logs/H1-instrument-E1/exp24-E1-main-typed-vs-free-30-seeds-schema-v2/`), with each game's
+extraction and replay beside it; `logs/unfiled/` holds games with no experiment and
+`logs/groups/<id>/` the files attached to hypothesis pages. `runs.log_path` is the path from the
+repo root, so the console, rescore and bundle scripts follow it. New games are saved there by
+the queue. Nothing in the ship touches `logs/`.
+
+Ship order, so no run data is ever at risk:
+1. `sudo -u mara bash /opt/mara/deploy/backup.sh` (database copy + logs.tgz under /opt/mara/backups/).
+2. Push, rsync the code (never logs or .env), restart the service in a quiet window.
+3. `python research/pilot/organize_logs.py --root /opt/mara --experiments 21,22,23,24,25,27,28,29,30`
+   (dry run, prints the plan), then the same with `--apply` for H1; then without `--experiments` for the rest.
+4. Re-price: `.venv/bin/python -c "from arena import db, costs; print(costs.backfill_costs(db.connect(), force=True))"`.
+5. Seed the E1 package group (files copied to the box's research/ first), then the box rescore.

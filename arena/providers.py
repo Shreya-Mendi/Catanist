@@ -300,6 +300,28 @@ class OpenAIProvider(Provider):
         return GitHubModelsProvider.complete_messages(self, system, messages, model, options)
 
 
+def _request_kwargs(model: str, options: dict | None = None) -> dict:
+    """Per-generation request parameters for the OpenAI-compatible providers
+    (OpenAIProvider delegates to GitHubModelsProvider.complete_messages with
+    itself as self, so this lives at module level). Reasoning models (gpt-5
+    family, o-series) bill their hidden reasoning as output and count it inside
+    the completion cap, so they get a wider cap and a reasoning effort:
+    OPENAI_REASONING_EFFORT in .env (default "low"; "minimal" is cheapest) or
+    options["reasoning_effort"]. At 1,100 tokens and default effort a gpt-5
+    reply can be all reasoning and no JSON, which the engine would score as a
+    parse failure (2026-10-24)."""
+    m = str(model).split("/")[-1].lower()
+    if m.startswith(("gpt-5", "gpt-6", "o1", "o3", "o4")):
+        # cheapest honest default per family: "none" where the API offers it
+        # (gpt-6, gpt-5.4 and later), "minimal" for the first gpt-5 generation
+        none_ok = m.startswith("gpt-6") or re.match(r"gpt-5\.(4|5|6)", m) is not None
+        effort = ((options or {}).get("reasoning_effort") or os.environ.get("OPENAI_REASONING_EFFORT")
+                  or ("none" if none_ok else "minimal"))
+        return {"max_completion_tokens": int((options or {}).get("max_completion_tokens", 3000)),
+                "reasoning_effort": effort}
+    return dict(max_tokens=1100, temperature=0.8)
+
+
 class GitHubModelsProvider(Provider):
     """GitHub Models — free/low-cost inference, OpenAI-compatible.
 
@@ -340,7 +362,7 @@ class GitHubModelsProvider(Provider):
         type(self)._last_call = time.time()
         for attempt in range(self.RETRIES):
             try:
-                kw = dict(max_tokens=1100, temperature=0.8)
+                kw = _request_kwargs(model, options)
                 msgs = [{"role": "system", "content": system}] + list(messages)
                 try:
                     resp = self.client.chat.completions.create(
@@ -445,8 +467,15 @@ class TinkerProvider(Provider):
 
     def _sampler(self, model):
         if model not in self._samplers:
-            self._samplers[model] = self._svc.create_sampling_client(base_model=model)
-            self._tokenizers[model] = self._samplers[model].get_tokenizer()
+            # E5: a fine-tuned checkpoint plays as "<base model>@tinker://<path>";
+            # the tokenizer is the base model's (2026-10-25)
+            if "@tinker://" in str(model):
+                base, path = str(model).split("@", 1)
+                self._samplers[model] = self._svc.create_sampling_client(model_path=path)
+                self._tokenizers[model] = self._svc.create_sampling_client(base_model=base).get_tokenizer()
+            else:
+                self._samplers[model] = self._svc.create_sampling_client(base_model=model)
+                self._tokenizers[model] = self._samplers[model].get_tokenizer()
         return self._samplers[model], self._tokenizers[model]
 
     def complete(self, system, user, model, options):
@@ -486,6 +515,8 @@ class TinkerProvider(Provider):
                 fut = sc.sample(prompt=prompt, sampling_params=params, num_samples=1)
                 result = fut.result() if hasattr(fut, "result") else fut
                 text = tok.decode(result.sequences[0].tokens)
+                _USAGE.last = {"model": model, "input": len(list(ids)),      # cost ledger (2026-10-24)
+                               "output": len(result.sequences[0].tokens)}
                 for end in ("<|im_end|>", "<|endoftext|>", "</s>"):
                     text = text.split(end)[0]
                 text = _final_channel(text)          # gpt-oss Harmony channels

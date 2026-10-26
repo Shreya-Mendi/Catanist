@@ -10,9 +10,40 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .ledger import replay_plans, repeat_indices, speaker_of
+from .costs import estimate_tokens
+
 
 def _by_name(setup):
     return {p["name"]: p for p in setup}
+
+
+def _fallback_reason(ev: dict) -> str:
+    """Why the engine, not the model, played this decision: the provider error
+    class the player recorded in the private field, an unparseable reply, or a
+    plain heuristic move."""
+    priv = (ev.get("private") or "").strip()
+    if priv.startswith("<provider error:"):
+        return priv[len("<provider error:"):].strip(" >") or "provider error"
+    if priv == "<unparseable>" or ev.get("parse_ok") is False:
+        return "unparseable reply"
+    return "engine fallback"
+
+
+def fallback_summary(players: dict) -> str | None:
+    """One line for the console: the dominant reason decisions were not the
+    model's, e.g. 'AuthenticationError on 234/234 decisions'. None when every
+    decision was the model's."""
+    reasons: dict[str, int] = {}
+    n_dec = 0
+    for pd in players.values():
+        n_dec += pd.get("decisions", 0)
+        for k, v in (pd.get("fallback_reasons") or {}).items():
+            reasons[k] = reasons.get(k, 0) + v
+    if not reasons:
+        return None
+    why, n = max(reasons.items(), key=lambda kv: kv[1])
+    return f"{why} on {n}/{n_dec} decisions"
 
 
 def game_metrics(result: dict) -> dict:
@@ -38,8 +69,22 @@ def game_metrics(result: dict) -> dict:
         "plans_censored": 0, "plan_private_mismatch": 0,
         "ab_promises_kept": 0, "ab_promises_broken": 0, "ab_promises_declined": 0,
         "ab_promises_excused": 0, "ab_promises_censored": 0,
-        "tokens_in": 0, "tokens_out": 0, "usage_decisions": 0,
+        "tokens_in": 0, "tokens_out": 0, "usage_decisions": 0, "usage_estimated": 0,
+        "fallback_reasons": {},   # why a decision was not the model's (2026-10-21)
+        "repeats": 0,             # same line, same speaker, same turn: logged, not counted
+        "excluded": 0,            # researcher exclusion (overrides overlay), with a reason
     })
+
+    # --- 2026-10-21: repeats, and plans narrated on a move that never happened ---
+    repeat_idx = repeat_indices(events)
+    failed_narration = {}
+    for i, ev in enumerate(events):
+        sp = ev.get("speech") or {}
+        if ev.get("action_bound") == "narration" and sp.get("type") == "plan" \
+                and ev.get("type") == "pass" and not ev.get("plan_id") and i not in repeat_idx:
+            failed_narration[i] = {"do": sp.get("do"), "target": sp.get("target"), "window": 1}
+    posthoc = replay_plans(events, failed_narration) if failed_narration else {}
+    skip_promise_ids, skip_plan_ids = set(), set()
 
     final_vps = result.get("vps", {})
     # reconstruct running public VP to know who led at each robber move
@@ -55,7 +100,7 @@ def game_metrics(result: dict) -> dict:
                    "rob": ("robber_move", None)}
     pending_plan: dict[str, str] = {}     # player -> first typed plan verb awaiting its next event
 
-    for ev in events:
+    for i, ev in enumerate(events):
         t = ev["type"]
         a = ev.get("actor") or ev.get("proposer") or ev.get("responder")
         if ev.get("parse_ok") is False and (ev.get("actor")):
@@ -69,6 +114,8 @@ def game_metrics(result: dict) -> dict:
             m["decisions"] += 1
             if ev.get("played_by") == "heuristic" or ev.get("parse_ok") is False:
                 m["heuristic_decisions"] += 1
+                why = _fallback_reason(ev)
+                m["fallback_reasons"][why] = m["fallback_reasons"].get(why, 0) + 1
             else:
                 m["model_decisions"] += 1
             if ev.get("rewritten"):
@@ -76,19 +123,33 @@ def game_metrics(result: dict) -> dict:
             if ev.get("usage"):
                 m["tokens_in"] += int(ev["usage"].get("input", 0)); m["tokens_out"] += int(ev["usage"].get("output", 0))
                 m["usage_decisions"] += 1
+            elif ev.get("played_by") != "heuristic" and (ev.get("prompt") or ev.get("raw")):
+                # no usage from the provider (Tinker before 2026-10-24, OpenAI games
+                # before the ledger): estimate from the stored prompt and reply
+                ti, to = estimate_tokens(ev.get("prompt") or "", ev.get("raw") or "",
+                                         "typed" if ev.get("speech") is not None else "free")
+                m["tokens_in"] += ti; m["tokens_out"] += to
+                m["usage_estimated"] += 1
             if ev.get("resampled"):
                 m["resampled"] += 1
             sp = ev.get("speech")
             if ev.get("public_ok") is False:          # free arm: statement obligation failed
                 m["speech_fail"] += 1
-            if sp is not None:
+            if i in repeat_idx or ev.get("excluded"):
+                m["repeats" if i in repeat_idx else "excluded"] += 1
+                if ev.get("promise_id"):
+                    skip_promise_ids.add(ev["promise_id"])
+                if ev.get("plan_id"):
+                    skip_plan_ids.add(ev["plan_id"])
+            elif sp is not None:
                 if ev.get("speech_ok") is False:
                     m["speech_fail"] += 1
                 elif sp.get("type") != "none":
                     m["statements"] += 1
-                    bound = ev.get("action_bound")
-                    if not bound and sp.get("type") == "claim" and sp.get("about") and t == "robber_move":
-                        bound = "hex"            # pre-2026-10-13b logs: the engine did not tag it yet
+                    bound = effective_bound(ev)
+                    if i in posthoc:
+                        bound = None             # the narrated move never happened: a plan
+                        m["plans_" + posthoc[i]] += 1
                     if bound:
                         m["action_bound"] += 1
                         if bound == "inverted":
@@ -125,11 +186,15 @@ def game_metrics(result: dict) -> dict:
                     pending_plan[a] = verb
 
         if t == "plan_resolved":
+            if ev.get("plan_id") in skip_plan_ids:
+                continue
             m = per[ev["planner"]]
             key = {"kept": "plans_kept", "broken": "plans_broken",
                    "excused": "plans_excused", "censored": "plans_censored"}.get(ev["status"])
             if key:
                 m[key] += 1
+            continue
+        if t == "promise_resolved" and ev.get("promise_id") in skip_promise_ids:
             continue
         if t == "promise_resolved" and ev.get("action_bound"):
             # restated live offers: engine-executed, kept out of the headline
@@ -201,7 +266,10 @@ def game_metrics(result: dict) -> dict:
             # --- battery v1 ---
             "coverage": (round(m["model_decisions"] / m["decisions"], 3)
                          if m["decisions"] else None),
+            "decisions": m["decisions"],
             "heuristic_decisions": m["heuristic_decisions"],
+            "fallback_reasons": m["fallback_reasons"],
+            "repeats": m["repeats"], "excluded": m["excluded"], "own_turns": m["own_turns"],
             "rewritten_proposals": m["rewritten_proposals"],
             "speech_fail": m["speech_fail"], "resampled": m["resampled"],
             "statements": m["statements"], "checkable": m["checkable"],
@@ -238,7 +306,8 @@ def game_metrics(result: dict) -> dict:
             "plan_follow_through": (round(m["plan_followed"] / m["plan_first_steps"], 3)
                                     if m["plan_first_steps"] else None),
             "tokens": {"input": m["tokens_in"], "output": m["tokens_out"],
-                       "decisions_reported": m["usage_decisions"]},
+                       "decisions_reported": m["usage_decisions"],
+                       "estimated_decisions": m["usage_estimated"]},
             "vp": final_vps.get(name), "won": result["winner"] == name,
             "settlements": m["settlements"], "cities": m["cities"],
             "roads": m["roads"], "knights": m["knights"],
@@ -253,7 +322,61 @@ def game_metrics(result: dict) -> dict:
         }
 
     return {"winner": result["winner"], "reason": result.get("reason"),
-            "n_players": len(setup), "vps": final_vps, "players": players}
+            "n_players": len(setup), "vps": final_vps, "players": players,
+            "fallback_summary": fallback_summary(players),
+            "posthoc_plans": [{"event_idx": i, "planner": speaker_of(events[i]),
+                               "do": failed_narration[i]["do"], "target": failed_narration[i].get("target"),
+                               "status": st} for i, st in sorted(posthoc.items())]}
+
+
+# --- shared readers for the console views (2026-10-21) --------------------------
+def effective_bound(ev: dict):
+    """The action-bound tag as the battery reads it: the engine's tag, plus the
+    hex idiom for logs older than the engine rule (a claim about another
+    player's hand on the speaker's own robber move names the hex, not the cards)."""
+    if "ab_override" in ev:                       # a researcher set it explicitly
+        return ev.get("action_bound")
+    bound = ev.get("action_bound")
+    sp = ev.get("speech") or {}
+    if not bound and sp.get("type") == "claim" and sp.get("about") and ev.get("type") == "robber_move":
+        bound = "hex"
+    return bound
+
+
+BUILD_COST = {"settlement": {"wood": 1, "brick": 1, "sheep": 1, "wheat": 1},
+              "city": {"wheat": 2, "ore": 3}, "road": {"wood": 1, "brick": 1}}
+DEV_COST = {"sheep": 1, "wheat": 1, "ore": 1}
+
+
+def hands_at_utterance(ev: dict) -> dict:
+    """Every player's full hand when the line was said. Logs since 2026-10-21
+    stamp at utterance; older logs stamped after the move, so the cost of a
+    build, a development card, a bank trade or a steal is put back."""
+    st = ev.get("stamp") or {}
+    hands = {n: dict(h) for n, h in (st.get("hands_full") or {}).items()}
+    if st.get("at") == "utterance" or not hands:
+        return hands
+    who = speaker_of(ev)
+    mine = hands.get(who)
+    if mine is None:
+        return hands
+    t = ev.get("type")
+    if t == "build" and not ev.get("setup"):
+        for r, n in BUILD_COST.get(ev.get("kind"), {}).items():
+            mine[r] = mine.get(r, 0) + n
+    elif t == "dev_buy":
+        for r, n in DEV_COST.items():
+            mine[r] = mine.get(r, 0) + n
+    elif t == "bank_trade":
+        for r, n in (ev.get("give") or {}).items():
+            mine[r] = mine.get(r, 0) + n
+        for r, n in (ev.get("want") or {}).items():
+            mine[r] = max(0, mine.get(r, 0) - n)
+    elif t == "robber_move" and ev.get("stole") and ev.get("victim") in hands:
+        r = ev["stole"]
+        mine[r] = max(0, mine.get(r, 0) - 1)
+        hands[ev["victim"]][r] = hands[ev["victim"]].get(r, 0) + 1
+    return hands
 
 
 def _group(metric_dicts: list[dict], key: str) -> dict:

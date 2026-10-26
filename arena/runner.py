@@ -113,6 +113,7 @@ def build_players(cfg: dict, provider_get) -> list[PlayerAgent]:
             memory=cfg.get("memory", "chat"),
             memory_scope=cfg.get("memory_scope", "full"),
             prompt_variant=str(cfg.get("prompt_variant", "A")).upper(),
+            prompt_override=cfg.get("prompt_override") or None,
             costume=spec.get("costume", ""), color=spec.get("color", ""),
             provider=prov,
             rng=random.Random(cfg.get("seed", 0) + i),
@@ -127,7 +128,8 @@ def run_one(cfg: dict, provider_get=None, progress_cb=None) -> dict:
                 speech_mode=cfg.get("speech_mode", "free"),
                 max_turns=cfg.get("max_turns"),
                 progress_cb=progress_cb, live_path=cfg.get("_live_path"),
-                board_profile=cfg.get("board_profile", "standard"))
+                board_profile=cfg.get("board_profile", "standard"),
+                p2p_trade=bool(cfg.get("p2p_trade", True)))
     result = game.run()
     result["config_name"] = cfg.get("name", "game")
     result["scene"] = cfg.get("scene", "harbor")   # viz theme
@@ -137,21 +139,23 @@ def run_one(cfg: dict, provider_get=None, progress_cb=None) -> dict:
 _SAVE_SEQ = 0
 
 
-def save_result(result: dict, tag: str = "") -> Path:
+def save_result(result: dict, tag: str = "", subdir: str | None = None) -> Path:
     """Persist a game as JSON — the replayable source of truth. Filenames are
     made unique so games finishing in the same second never overwrite (matters
-    for sweeps, which save many games per second)."""
+    for sweeps, which save many games per second). `subdir` files the game under
+    logs/<hypothesis>/<experiment>/ (2026-10-25)."""
     global _SAVE_SEQ
-    LOG_DIR.mkdir(exist_ok=True)
+    out_dir = LOG_DIR / subdir if subdir else LOG_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     base = f"{result.get('config_name','game')}_{tag}_{stamp}".strip("_")
     # ASCII-safe file names: an experiment name with a long dash or a space
     # produced log paths the browser percent-encodes and links then 404'd
     base = re.sub(r"[^A-Za-z0-9._=-]+", "-", base).strip("-")
-    path = LOG_DIR / f"{base}.json"
+    path = out_dir / f"{base}.json"
     while path.exists():
         _SAVE_SEQ += 1
-        path = LOG_DIR / f"{base}-{_SAVE_SEQ}.json"
+        path = out_dir / f"{base}-{_SAVE_SEQ}.json"
     path.write_text(json.dumps(result, indent=2))
     return path
 

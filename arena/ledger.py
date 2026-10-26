@@ -22,6 +22,9 @@ are the same for every viewer.
 """
 from __future__ import annotations
 
+import ast
+import re
+
 
 class PromiseLedger:
     def __init__(self):
@@ -132,6 +135,98 @@ class PromiseLedger:
     def drain(self) -> list[dict]:
         out, self.resolutions = self.resolutions, []
         return out
+
+
+# --- shared log readers (2026-10-21): used by the extractor replay, the post hoc
+# plan replay in metrics, and the console views, so every reader agrees ---------
+_EVENT_KIND = {"bank_trade": "bank_trade", "dev_buy": "buy_dev",
+               "trade_proposal": "propose_trade", "robber_move": "rob"}
+
+
+def event_kind(e: dict):
+    """The plan-ledger kind of the move an event records, and its target."""
+    t = e.get("type")
+    if t == "build":
+        tgt = (f"V{e['vertex']}" if e.get("vertex") is not None
+               else f"E{e['edge']}" if e.get("edge") is not None else None)
+        return "build_" + str(e.get("kind")), tgt
+    if t in _EVENT_KIND:
+        tgt = e.get("target") if t == "trade_proposal" else e.get("victim") if t == "robber_move" else None
+        return _EVENT_KIND[t], tgt
+    return None, None
+
+
+def legal_from_prompt(prompt: str) -> list:
+    m = re.search(r"Legal actions:\s*(\[[^\]]*\])", prompt or "")
+    if not m:
+        return []
+    try:
+        return list(ast.literal_eval(m.group(1)))
+    except Exception:
+        return []
+
+
+def speaker_of(e: dict):
+    return e.get("actor") or e.get("proposer") or e.get("responder")
+
+
+def line_key(e: dict):
+    """One utterance = one line per speaker per turn. A model that repeats its
+    sentence at every decision of a turn (Nemotron did, 176 of 414 lines in one
+    game) said it once; repeats are logged, not counted."""
+    pub = (e.get("public") or "").strip()
+    who = speaker_of(e)
+    return (who, e.get("turn"), pub) if (who and pub) else None
+
+
+def repeat_indices(events: list) -> set:
+    """Indices of decision events whose public line repeats an earlier line of
+    the same speaker in the same turn."""
+    seen, out = set(), set()
+    for i, e in enumerate(events):
+        if "parse_ok" not in e:
+            continue
+        k = line_key(e)
+        if k is None:
+            continue
+        if k in seen:
+            out.add(i)
+        else:
+            seen.add(k)
+    return out
+
+
+def replay_plans(events: list, registrations: dict) -> dict:
+    """Resolve plans registered after the fact at the given event indices
+    ({idx: {"do", "target", "window"}}) by replaying the later events on the
+    engine's own clock (a plan made in the planner's turn starts ticking at
+    the next own-turn end). Returns {idx: status}."""
+    plans = PlanLedger()
+    ids = {}
+    cur_actor = None
+    for i, e in enumerate(events):
+        t = e.get("type")
+        if t == "turn":
+            if cur_actor is not None:
+                plans.tick_own_turn_end(cur_actor, e.get("turn", 0) - 1)
+            cur_actor = e.get("actor")
+        who = speaker_of(e)
+        if "parse_ok" in e and who:
+            legal = legal_from_prompt(e.get("prompt", ""))
+            if t == "robber_move":
+                legal = legal + ["rob"]
+            if legal:
+                plans.note_legal(who, legal, e.get("turn", 0))
+        if i in registrations and who:
+            r = registrations[i]
+            ids[i] = plans.register({"do": r["do"], "target": r.get("target"),
+                                     "window": r.get("window") or 1}, who, e.get("turn", 0))
+        kind, tgt = event_kind(e)
+        if kind and who:
+            plans.note_action(who, kind, tgt, e.get("turn", 0))
+    plans.close(events[-1].get("turn", 0) if events else 0)
+    status = {p["id"]: p["status"] for p in plans.plans}
+    return {i: status[pid] for i, pid in ids.items()}
 
 
 def _target_match(spec, actual) -> bool:

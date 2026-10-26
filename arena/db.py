@@ -42,7 +42,36 @@ CREATE TABLE IF NOT EXISTS labels(
 CREATE TABLE IF NOT EXISTS annotations(
   id INTEGER PRIMARY KEY, experiment_id INTEGER, author TEXT,
   text TEXT, created REAL);
+-- 2026-10-25: researcher overlay, scores, hypothesis groups, files, audit trail
+CREATE TABLE IF NOT EXISTS overrides(
+  id INTEGER PRIMARY KEY, run_id INTEGER, event_idx INTEGER, field TEXT,
+  original TEXT, corrected TEXT, reason TEXT, author TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS run_scores(
+  id INTEGER PRIMARY KEY, run_id INTEGER, author TEXT, score INTEGER, note TEXT,
+  created REAL, UNIQUE(run_id, author));
+CREATE TABLE IF NOT EXISTS groups(
+  id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT DEFAULT 'hypothesis',
+  owner TEXT, description TEXT DEFAULT '', cap_openai REAL, cap_tinker REAL, created REAL);
+CREATE TABLE IF NOT EXISTS group_members(
+  group_id INTEGER, experiment_id INTEGER, UNIQUE(group_id, experiment_id));
+CREATE TABLE IF NOT EXISTS group_files(
+  id INTEGER PRIMARY KEY, group_id INTEGER, name TEXT, path TEXT, mime TEXT,
+  size INTEGER, uploader TEXT, created REAL, UNIQUE(group_id, name));
+CREATE TABLE IF NOT EXISTS activity(
+  id INTEGER PRIMARY KEY, who TEXT, what TEXT, target TEXT, detail TEXT, created REAL);
 """
+
+# columns added after a table first shipped: (table, column, DDL type)
+_MIGRATIONS = [
+    ("runs", "progress_vps", "TEXT"), ("runs", "priority", "INTEGER DEFAULT 0"),
+    ("runs", "cost_usd", "REAL"), ("experiments", "budget_usd", "REAL"),
+    ("labels", "reason", "TEXT"),                       # why the labeler chose the label
+    ("experiments", "group_id", "INTEGER"),             # hypothesis group
+    ("experiments", "prereg", "TEXT"),                  # pre-registration block, JSON, locked at launch
+    ("runs", "excluded", "INTEGER DEFAULT 0"),          # excluded from analysis, with a reason
+    ("runs", "exclude_reason", "TEXT"),
+    ("runs", "metrics_corrected", "TEXT"),              # metrics with researcher overrides applied
+]
 
 
 def connect() -> sqlite3.Connection:
@@ -52,13 +81,22 @@ def connect() -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(_SCHEMA)
     # self-migrations for databases created by older schemas
-    cols = {r[1] for r in con.execute("PRAGMA table_info(runs)")}
-    if "progress_vps" not in cols:
-        con.execute("ALTER TABLE runs ADD COLUMN progress_vps TEXT")
-    if "priority" not in cols:
-        con.execute("ALTER TABLE runs ADD COLUMN priority INTEGER DEFAULT 0")
-        con.commit()
+    have = {}
+    for table, col, ddl in _MIGRATIONS:
+        if table not in have:
+            have[table] = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        if col not in have[table]:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+            have[table].add(col)
+    con.commit()
     return con
+
+
+def log_activity(con, who: str, what: str, target: str = "", detail: str = ""):
+    """Audit trail: overrides, exclusions, caps, group edits, uploads."""
+    with con:
+        con.execute("INSERT INTO activity(who,what,target,detail,created) VALUES(?,?,?,?,?)",
+                    (who, what, target, str(detail)[:500], time.time()))
 
 
 # --- auth ----------------------------------------------------------------------
@@ -118,9 +156,10 @@ def backfill_logs():
     con = connect()
     known = {r["log_path"] for r in con.execute("SELECT log_path FROM runs")}
     n = 0
-    for f in sorted((ROOT / "logs").glob("*.json")):
-        rel = f"logs/{f.name}"
-        if rel in known:
+    for f in sorted((ROOT / "logs").rglob("*.json")):
+        rel = str(f.relative_to(ROOT))
+        if rel in known or f.name.endswith("_extracted.json") or f.name.startswith(".live_") \
+                or "groups" in f.relative_to(ROOT / "logs").parts[:1]:
             continue
         try:
             d = json.loads(f.read_text())

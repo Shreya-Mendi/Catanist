@@ -1,0 +1,5 @@
+/* Type (2026-10-25): Satoshi for text, Clash Display for headings, both from Fontshare. */
+@import url("https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=clash-display@500,600&display=swap");
+:root{--font-text:"Satoshi","Helvetica Neue",-apple-system,system-ui,sans-serif;
+      --font-head:"Clash Display","Satoshi","Helvetica Neue",sans-serif;
+      --font-mono:"JetBrains Mono",ui-monospace,Menlo,monospace}

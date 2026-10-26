@@ -14,6 +14,7 @@ import time
 import traceback
 
 from . import db
+from .costs import run_cost, budget_guard
 from .metrics import game_metrics
 from .runner import run_one, save_result, _provider_cache
 
@@ -60,7 +61,9 @@ def _work(worker_id: int):
             con.commit()
         try:
             result = run_one(cfg, _providers, progress_cb=tick)
-            path = save_result(result, tag=f"run{rid}")
+            from .datafiles import subdir_for
+            path = save_result(result, tag=f"run{rid}", subdir=subdir_for(con, rid))
+            rel_path = str(path.relative_to(LOG_DIR.parent))
             try:                                  # replay + gallery, best effort
                 from viz.scene import render as render_scene
                 from viz.gallery import build_gallery
@@ -91,11 +94,15 @@ def _work(worker_id: int):
             # errors -> engine fallback) is kept but marked, and requeued once
             covs = [pd.get("coverage") for pd in (mdict.get("players") or {}).values()]
             low = [c for c in covs if c is not None and c < 0.95]
+            reason = None
             if low:
                 mdict["low_coverage"] = min(low)
                 row = con.execute("SELECT config, condition, seed, max_turns, owner, experiment_id, error "
                                   "FROM runs WHERE id=?", (rid,)).fetchone()
                 already = "requeue of run" in (row["error"] or "")
+                # why the model did not play (dead key, unparseable replies) goes
+                # on the row, so Watch shows it next to the badge (2026-10-21)
+                reason = f"coverage {min(low):.2f}: {mdict.get('fallback_summary') or 'engine fallback'}"
                 with con:
                     if not already:
                         con.execute("INSERT INTO runs(experiment_id,owner,config,condition,seed,max_turns,"
@@ -103,13 +110,27 @@ def _work(worker_id: int):
                                     (row["experiment_id"], row["owner"], row["config"], row["condition"],
                                      row["seed"], row["max_turns"], "queued",
                                      f"requeue of run {rid} (coverage {min(low):.2f})", time.time()))
-                print(f"[jobs] run {rid}: low coverage {min(low):.2f}"
+                print(f"[jobs] run {rid}: {reason}"
                       + ("" if already else ", requeued once"), flush=True)
             metrics = json.dumps(mdict)
             with con:
-                con.execute("UPDATE runs SET status=?, finished=?, "
-                            "log_path=?, metrics=? WHERE id=?",
-                            ("low_coverage" if low else "done", time.time(), f"logs/{path.name}", metrics, rid))
+                if low:
+                    con.execute("UPDATE runs SET status='low_coverage', finished=?, log_path=?, "
+                                "metrics=?, error=? WHERE id=?",
+                                (time.time(), rel_path, metrics,
+                                 ((row["error"] + " · ") if row["error"] else "") + reason, rid))
+                else:
+                    con.execute("UPDATE runs SET status='done', finished=?, log_path=?, metrics=? "
+                                "WHERE id=?", (time.time(), rel_path, metrics, rid))
+                cost = run_cost(mdict)
+                con.execute("UPDATE runs SET cost_usd=? WHERE id=?",
+                            (cost["usd"] if cost["usd"] is not None else 0.0, rid))
+            eid_row = con.execute("SELECT experiment_id FROM runs WHERE id=?", (rid,)).fetchone()
+            if eid_row and eid_row["experiment_id"] is not None:
+                g = budget_guard(con, eid_row["experiment_id"])
+                if g and g["held"]:
+                    print(f"[jobs] experiment {eid_row['experiment_id']}: budget cap ${g['cap']:.2f} reached "
+                          f"(${g['spent']:.2f} spent), {g['held']} queued run(s) held", flush=True)
             live.unlink(missing_ok=True)
         except Exception as e:
             live.unlink(missing_ok=True)

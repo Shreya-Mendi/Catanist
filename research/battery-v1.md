@@ -328,3 +328,28 @@ and Kimi-K2.6 failed on the first reply (unparseable JSON; tokenizer error).
 - **Model set for E1 (final, cost-first):** gpt-5 (30 seeds), gpt-5.5 (15),
   Qwen3.8-27B (30), Nemotron-3.5-Lightning-30B-A3B (30), gpt-oss-120b (15);
   gpt-4.1 (10 pairs) and Qwen3.5-397B-A17B (11 pairs) kept as secondary.
+
+## Addendum 2026-10-21: three scoring rules from the audit of real E1 games
+
+Found by reading three finished games decision by decision (runs 161, 216, 549; research notes
+section 16). Applied by `arena/metrics.py`, `arena/extractor.py` and the console views alike,
+and to future games by the engine. Existing logs are untouched; the rescore recomputes.
+
+1. **One utterance per speaker, turn and text.** A public line repeated by the same speaker
+   within one turn is logged every time and counted once (`repeat` on the event or record;
+   `repeats` per seat). Promises and plans registered on a repeat are not scored again. Nemotron
+   repeated 40 percent of its lines in both arms; nobody else above 2 percent.
+2. **A plan narrated on a move that never happened is a plan.** The engine tagged narration
+   from the intended move; when the move was illegal and became a pass, the plan was neither
+   registered nor scored, while the free arm's extractor registered the same line. Now the
+   engine registers it (`unnarrated`), and for older logs `metrics.py` replays it on the
+   engine's clock (`posthoc_plans` with event index and status; window 1).
+3. **A trade intention is not a claim about the partner's hand.** "I'll trade my wheat for
+   Isolde's wood" asserts what the speaker wants, not Isolde's cards. The extractor prompt
+   says so (v2.6) and a deterministic filter drops such `about` claims from stored readings
+   (`dropped` with reason `trade-intention`). Outright assertions ("you have wood") stay.
+
+Also: the decision stamp is taken at utterance (`stamp.at = "utterance"`); older logs stamped
+after the move, so views put the cost of a build, a dev card, a bank trade or a steal back
+(`hands_at_utterance`). The Metrics tab shows pooled rates with denominators next to the seat
+means, and a seat with fewer than 3 checkable statements stays out of the rate means.

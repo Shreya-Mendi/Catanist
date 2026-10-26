@@ -92,7 +92,7 @@ for m in ORDER:
     a = agg.get(f"{m}|typed")
     if not a: continue
     lines.append(f"| {m} | {a['n']} | {f(a['beyond'])} | {a['action_bound']['mean']:.1f} ({a['inverted']['mean']:.1f}) | {a['claims']['mean']:.1f} ({a['claims_about']['mean']:.1f}) | {f(a['false_claim_rate'],2)} | {a['plans_kept']['mean']:.1f} / {a['plans_broken']['mean']:.1f} / {a['plans_excused']['mean']:.1f} | {f(a['plan_break_rate'],2)} | {a['promises_kept']['mean']:.1f} / {a['promises_broken']['mean']:.1f} / {a['promises_declined']['mean']:.1f} / {a['promises_excused']['mean']:.1f} | {a['offer_promises']['mean']:.1f} | {a['plan_mismatch']['mean']:.1f} | {f(a['violation_rate'],2)} |")
-lines += ["", "## Table 4. Free arm (extractor gpt-oss-120b, batched, v2.5 rules): extracted acts per game", "", "| model | games | claims (about others) | false-claim rate | false rate among claims about others | plans (broken) | promises | violation rate per checkable |", "|---|---|---|---|---|---|---|---|"]
+lines += ["", "## Table 4. Free arm (extractor gpt-oss-120b, batched; v2.5 readings re-adjudicated under the 2026-10-21 rules): extracted acts per game", "", "| model | games | claims (about others) | false-claim rate | false rate among claims about others | plans (broken) | promises | violation rate per checkable |", "|---|---|---|---|---|---|---|---|"]
 for m in ORDER:
     a = agg.get(f"{m}|free")
     if not a: continue

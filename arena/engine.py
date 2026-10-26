@@ -36,11 +36,12 @@ _DEV_DECK = (["knight"] * 14 + ["vp"] * 5 + ["monopoly"] * 2
 
 class Game:
     def __init__(self, players: list[PlayerAgent], seed: int = 0,
-                 speech_mode: str = "free", max_turns: int | None = None,
+                 speech_mode: str = "free", max_turns: int | None = None, p2p_trade: bool = True,
                  progress_cb=None, live_path=None, board_profile: str = "standard"):
         self.players = players
         self.n = len(players)
         self.speech_mode = speech_mode
+        self.p2p_trade = bool(p2p_trade)   # the socially stripped control arm: bank trades only (2026-10-25)
         self.max_turns = max_turns or MAX_TURNS
         self.progress_cb = progress_cb
         self.live_path = live_path          # partial log flushed here each turn
@@ -388,7 +389,7 @@ class Game:
         if self.deck and self._afford(pi, "dev"):
             legal.append("buy_dev")
         partners = [q.name for j, q in enumerate(self.players) if j != pi]
-        if allow_trade and any(p.res.values()):
+        if allow_trade and self.p2p_trade and any(p.res.values()):
             legal.append("propose_trade")
         bank = self._bank_trades(pi)
         if bank:
@@ -439,7 +440,7 @@ class Game:
                 # the decision to do nothing is still a decision: log it with its
                 # full instrument payload (reasoning, intent, plan, speech) so
                 # quiet turns stay readable and any attached promise registers
-                self._log(type="pass", actor=p.name, **self._dfields(dec))
+                self._log(type="pass", actor=p.name, **self._dfields(dec, executed="end_turn"))
                 break
             if action == "propose_trade":
                 trades += 1
@@ -476,6 +477,10 @@ class Game:
         made ("narration"). `offer` = (give, want, partner) when the decision
         answers a trade."""
         dec._actor = actor_name
+        # hands as they stand when the line is said (2026-10-21): before this the
+        # stamp was taken after the move, so a build event showed the hand after
+        # paying for it
+        dec._stamp = {**self._stamp(), "at": "utterance"}
         sp = dec.speech
         if not sp:
             return dec
@@ -514,17 +519,20 @@ class Game:
             kind = "rob" if action == "rob" else self._ACTION_KIND.get(action)
             if kind and sp.get("do") == kind:
                 bound = "narration"
+                dec._narration_kind = kind
         dec._action_bound = bound
         return dec
 
-    def _dfields(self, dec):
+    def _dfields(self, dec, executed=None):
         """Everything a logged decision event carries for the instrument. Also
         ingests the speech exactly once: registers promises to the ledger and
-        adds the rendered line to the table-talk broadcast."""
+        adds the rendered line to the table-talk broadcast. `executed` names
+        what the engine actually did when that differs from the intended move
+        ("end_turn" when an illegal move became a pass)."""
         actor_name = getattr(dec, "_actor", None)
         out = {"private": dec.private, "public": dec.public,
                "parse_ok": dec.parse_ok, "intent": dec.intent,
-               "plan": dec.plan, "stamp": self._stamp()}
+               "plan": dec.plan, "stamp": getattr(dec, "_stamp", None) or self._stamp()}
         if dec.speech is not None:
             out["speech"] = dec.speech
             out["speech_ok"] = dec.speech_ok
@@ -533,8 +541,24 @@ class Game:
             # post-hoc checking would judge against the wrong hand
             if hasattr(dec, "_claim_true"):
                 out["claim_true"] = dec._claim_true
+            if getattr(dec, "_action_bound", None) == "narration" and executed == "end_turn":
+                # the narrated move never happened (illegal spot, short hand):
+                # the table heard a plan, so it is registered as one (2026-10-21;
+                # before this such lines were silently unscored in the typed arm
+                # while the free arm's extractor registered them)
+                dec._action_bound = None
+                out["unnarrated"] = True
             if getattr(dec, "_action_bound", None):
                 out["action_bound"] = dec._action_bound
+        if dec.public and actor_name:
+            # a line repeated by the same speaker within one turn is one utterance:
+            # logged every time, registered and counted once (2026-10-21)
+            if not hasattr(self, "_said"):
+                self._said = set()
+            key = (self.turn, actor_name, dec.public.strip())
+            if key in self._said:
+                out["repeat"] = True
+            self._said.add(key)
         if getattr(dec, "resampled", False):
             out["resampled"] = True
         if getattr(dec, "usage", None):
@@ -550,7 +574,7 @@ class Game:
         if holder is not None:
             out["memory_len"] = len(holder.history) // 2
             out["notes_len"] = len(holder.notes)
-        if not getattr(dec, "_ingested", False):
+        if not getattr(dec, "_ingested", False) and not out.get("repeat"):
             dec._ingested = True
             bound = getattr(dec, "_action_bound", None)
             if dec.speech and dec.speech.get("type") == "promise" and actor_name \
@@ -868,6 +892,7 @@ class Game:
             (f"HORIZON: game ends at {WIN_VP} VP or global turn {self.max_turns}; "
              f"~{max(0, (self.max_turns - self.turn) // self.n)} of your turns remain at most."),
             self._digest_block(),
+            *(["Player-to-player trading is OFF in this game: bank trades only."] if not self.p2p_trade else []),
             f"Legal actions: {opts['legal']}",
         ]
         if "build_settlement" in opts["legal"]:
